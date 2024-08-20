@@ -334,16 +334,17 @@ void loop() {
     //displaySessions();
     connected = true;
     connectionBuzz();
+    
     while (central.connected()) {
       int start = 0;
       int x = 2;
       byte cByte = 0;
       byte pByte = 0;
 
-      waitForStart(central, x, cByte);
+      waitForStart(central, x, pByte, cByte);
 
       if (x == 1) {
-        initiator(central, x, cByte);
+        initiator(central, x, pByte, cByte);
 
         if(controlSessionData.numOfPInitiations < structNumOfInits) {
           controlSessionData.pInitTimes[controlSessionData.numOfPInitiations] = millis();
@@ -353,7 +354,7 @@ void loop() {
       }
 
       else if (x == 0) {
-        initiatee(central, cByte, x);
+        initiatee(central, pByte, cByte, x);
         //Set initiator to Control
         lastInitiator = 0;
         if(controlSessionData.numOfCInitiations < structNumOfInits) {
@@ -420,21 +421,21 @@ void mainLoop(BLEDevice central, int &start, byte &cByte, byte &pByte) {
       //Serial Output:
       Serial.println("cTouched value updated: ");
       Serial.println(cByte);
-      Serial.println("pLast before update: ");
-      Serial.println(pLast);
+      //Serial.println("pLast before update: ");
+      //Serial.println(pLast);
       Serial.println("pByte before update: ");
       Serial.println(pByte);
       
-      pLast = pByte;
-      pTouched.readValue(pByte);
+      //pLast = pByte;
+      //pTouched.readValue(pByte);
 
       //Serial Output:
       Serial.println("pByte newly read: ");
       Serial.println(pByte);
 
-      if(pByte == pLast) {
+      //if(pByte == pLast) {
         //Serial Output:
-        Serial.println("pLast == pByte");
+        //Serial.println("pLast == pByte");
 
         if (cByte == 1) {
           if(controlSessionData.numOfSessions < structNumOfSessions && controlSessionData.sessionArray[session].reUps < structNumOfReUps) {
@@ -471,7 +472,7 @@ void mainLoop(BLEDevice central, int &start, byte &cByte, byte &pByte) {
             controlSessionData.sessionArray[session].reUps++;
           }
         }
-      }
+      //}
     }
 
       switch (checkButton()) {
@@ -480,7 +481,7 @@ void mainLoop(BLEDevice central, int &start, byte &cByte, byte &pByte) {
           Serial.println("case 4: writing pTouched to 2");
 
           pTouched.writeValue((byte) 2);
-          pByte = 2;
+          pByte = 0;
           start = 1;
           if(controlSessionData.numOfSessions < structNumOfSessions) {
             controlSessionData.sessionArray[session].methodOfEnd = 1;
@@ -522,12 +523,12 @@ void timer(byte &cByte, byte &pByte, unsigned long &time) {
   Serial.println("Entered Timer");
 
   time = millis();
-  cTouched.writeValue((byte) 0);
+  //cTouched.writeValue((byte) 0);
   cByte = 0;
   pByte = 0;
 }
 
-void waitForStart(BLEDevice central, int &x, byte &cByte) {
+void waitForStart(BLEDevice central, int &x, byte &pByte, byte &cByte) {
   //Serial Output:
   Serial.println("Entered waitForStart");
 
@@ -547,7 +548,7 @@ void waitForStart(BLEDevice central, int &x, byte &cByte) {
         //Serial Output:
         Serial.println("Writing cTouched to 0 & breaking because cByte == 2");
 
-        cTouched.writeValue((byte) 0);
+        //cTouched.writeValue((byte) 0);
         cByte = 0;
         x = 0;
         break;
@@ -572,6 +573,7 @@ void waitForStart(BLEDevice central, int &x, byte &cByte) {
       Serial.println("i!=0, writing pTouched to 2");
 
       pTouched.writeValue((byte) 2);
+      pByte = 0;
       x = 1;
       break;
     }
@@ -582,7 +584,7 @@ void waitForStart(BLEDevice central, int &x, byte &cByte) {
   if(!central.connected()) Serial.println("Due to disconnect");
 }
 
-void initiator(BLEDevice central, int &x, byte &cByte) {
+void initiator(BLEDevice central, int &x, byte &pByte, byte &cByte) {
   //Serial Output:
   Serial.println("Entering Initiator");
 
@@ -629,7 +631,7 @@ void initiator(BLEDevice central, int &x, byte &cByte) {
         //Serial Output:
         Serial.println("cByte == 2, setting cTouched to 0");
 
-        cTouched.writeValue((byte) 0);
+        //cTouched.writeValue((byte) 0);
         cByte = 0;
         x = 2;
       }
@@ -641,7 +643,7 @@ void initiator(BLEDevice central, int &x, byte &cByte) {
   drv.setRealtimeValue(0);
 }
 
-void initiatee(BLEDevice central, byte cByte, int &x) {
+void initiatee(BLEDevice central, byte &pByte, byte &cByte, int &x) {
   //Serial Output:
   Serial.println("Entering initiatee");
   
@@ -658,7 +660,6 @@ void initiatee(BLEDevice central, byte cByte, int &x) {
       Serial.println("cTouched value updated");
       Serial.println(cByte);
 
-      //Why is this here?
       if (cByte == 4) {
         cByte = 0;
         x = 1;
@@ -688,9 +689,10 @@ void initiatee(BLEDevice central, byte cByte, int &x) {
         break;
       default:
         //Serial Output:
-        Serial.println("case default: writing cTouched to 2");
+        Serial.println("case default: writing pTouched to 2");
 
         pTouched.writeValue((byte) 2);
+        pByte = 0;
         x = 2;
         break;
       case 0:
