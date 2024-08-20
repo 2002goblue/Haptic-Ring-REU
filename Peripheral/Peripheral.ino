@@ -487,8 +487,6 @@ void mainLoop(BLEDevice central, int &start, byte &cByte, byte &pByte) {
           }
           break;
         case 0:
-          //Serial Output:
-          Serial.println("case 0: breaking");
           break;
         default:
           //Serial Output:
@@ -558,8 +556,8 @@ void waitForStart(BLEDevice central, int &x, byte &cByte) {
     i = checkButton();
 
     //Serial Output:
-    Serial.println("Button value: ");
-    Serial.println(i);
+    //Serial.println("Button value: ");
+    //Serial.println(i);
 
     if (i == 4 || i == 3) {
       //Serial Output:
@@ -660,6 +658,7 @@ void initiatee(BLEDevice central, byte cByte, int &x) {
       Serial.println("cTouched value updated");
       Serial.println(cByte);
 
+      //Why is this here?
       if (cByte == 4) {
         cByte = 0;
         x = 1;
@@ -695,8 +694,6 @@ void initiatee(BLEDevice central, byte cByte, int &x) {
         x = 2;
         break;
       case 0:
-        //Serial Output:
-        Serial.println("case 0: breaking");
         break;
     }
   }
