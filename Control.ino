@@ -46,6 +46,8 @@ int connectionBuzzOffLength = 100;
 
 const int consentDuration = 15000;
 
+byte cLast;
+
 void setup() {
   drv.begin();
   drv.setMode(DRV2605_MODE_REALTIME);
@@ -212,18 +214,22 @@ void mainLoop(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacteristi
 
     if (pTouched.valueUpdated()) {
       pTouched.readValue(pByte);
+      cLast = cByte;
+      cTouched.readValue(cByte);
+      if(cLast == cByte) {
+        if ((cByte == 1) && (pByte == 1)) {
+          cTouched.writeValue((byte) 3);
+          cByte = 3;
+          timer(cTouched, pTouched, cByte, pByte, time);
+        }
 
-      if (cByte && pByte) {
-        cTouched.writeValue((byte) 3);
-        timer(cTouched, pTouched, cByte, pByte, time);
-      }
+        if (pByte == 2) {
+          break;
+        }
 
-      if (pByte == 2) {
-        break;
-      }
-
-      if (pByte == 3) {
-        timer (cTouched, pTouched, cByte, pByte, time);
+        if (pByte == 3) {
+          timer (cTouched, pTouched, cByte, pByte, time);
+        }
       }
     }
 
@@ -251,8 +257,8 @@ void timer(BLECharacteristic cTouched, BLECharacteristic pTouched, byte &cByte, 
 
   time = millis();
   pTouched.writeValue((byte) 0);
-  cByte = 0;
   pByte = 0;
+  cByte = 0;
 }
 
 void waitForStart(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacteristic pTouched, int &x, byte &pByte) {
