@@ -5,6 +5,7 @@ On ArduinoIDE, you must use Seeed nRF52 mbed-Enabled Boards
 See https://wiki.seeedstudio.com/XIAO_BLE/ for more information
 
 Peripheral and Control code are uploaded to two Seeed Studio nRF52840 boards 
+
 Hardware setup includes:
 - 70mAh battery connected to the battery pins on the back of the board
 - Button wired to pin 1 (P0.03) and ground
