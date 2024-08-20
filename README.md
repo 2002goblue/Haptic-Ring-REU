@@ -1,5 +1,7 @@
 Board used: Seeed Studio nRF52840
+
 On ArduinoIDE, you must use Seeed nRF52 mbed-Enabled Boards
+
 See https://wiki.seeedstudio.com/XIAO_BLE/ for more information
 
 Peripheral and Control code are uploaded to two Seeed Studio nRF52840 boards 
