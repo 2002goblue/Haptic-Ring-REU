@@ -1,8 +1,10 @@
+//CODE WORKSPACE (SAVE CODE FROM THIS ONE TO VERSION UPDATES AT IMPORTANT MILESTONES, BUT THIS ONE ALWAYS REMAINS WORKSPACE)
+
 #include <ArduinoBLE.h>
 
-BLEService deviceService("19B10000-E8F2-537E-4F6C-D104768A1214"); // Bluetooth® Low Energy LED Service
+BLEService deviceService("19B10000-E8F2-537E-4F6C-D104768A1214"); // Bluetooth速 Low Energy LED Service
 
-// Bluetooth® Low Energy LED Switch Characteristic - custom 128-bit UUID, read and writable by central
+// Bluetooth速 Low Energy LED Switch Characteristic - custom 128-bit UUID, read and writable by central
 BLEByteCharacteristic controlTouched("19B10001-E8F2-537E-4F6C-D104768A1214", BLERead | BLEWrite | BLENotify);
 BLEByteCharacteristic peripheralTouched("19B10002-E8F2-537E-4F6C-D104768A1214", BLERead | BLEWrite | BLENotify);
 //BLEByteCharacteristic stopCharacteristic("19B10003-E8F2-537E-4F6C-D104768A1214", BLERead | BLEWrite);
@@ -15,7 +17,7 @@ byte controlByte;
 byte peripheralByte;
 //byte stopByte;
 
-
+int startByte = 0;
 int serialByte;
 
 void setup() {
@@ -32,7 +34,7 @@ void setup() {
   
   // begin initialization
   if (!BLE.begin()) {
-    if (Serial) Serial.println("starting Bluetooth® Low Energy module failed!");
+    if (Serial) Serial.println("starting Bluetooth速 Low Energy module failed!");
 
     while (1);
   }
@@ -66,7 +68,7 @@ void setup() {
 }
 
 void loop() {
-  // listen for Bluetooth® Low Energy peripherals to connect:
+  // listen for Bluetooth速 Low Energy peripherals to connect:
   BLEDevice central = BLE.central();
 
   // if a central is connected to peripheral:
@@ -75,63 +77,145 @@ void loop() {
     // print the central's MAC address:
     if (Serial)Serial.println(central.address());
 
-    // while the central is still connected to peripheral:
-    while (central.connected()) {
-      controlTouched.readValue(controlByte);
-      peripheralTouched.readValue(peripheralByte);
 
-      if(Serial) {
-        //Serial.println("Connected");
-        if(Serial.available() > 0) {
-          Serial.println("Available");
-          serialByte = Serial.parseInt();
+    //startConsent(central);
 
-          //Serial.println(serialByte);
-          //Serial.println("\n");
 
-          switch(serialByte) {
-          case 1: 
-            controlTouched.writeValue( (( (int) (controlTouched.value()) == 1) ? 0 : 1));
-            Serial.print("Sent red");
-            peripheralTouched.writeValue((int) (0));
-            controlByte = 1;
-            peripheralByte = 0;
-            //stopCharacteristic.writeValue((int) (0));
-            break;
-          case 2:
-            peripheralTouched.writeValue( (( (int) (peripheralTouched.value()) == 1) ? 0 : 1));
-            Serial.print("Sent blue");
-            controlTouched.writeValue((int) (0));
-            controlByte = 0;
-            peripheralByte = 1;
-            //stopCharacteristic.writeValue((int) (0));
-            break;
-          }
+    if (Serial) {
+      while (startByte != 1) {
+        if (Serial.available() > 0) {
+          startByte = Serial.parseInt();
         }
-      }
-
-      // if the remote device wrote to the characteristic,
-      // use the value to control the LED:
-
-      if(controlByte) {
-        digitalWrite(redPin, LOW);
-        digitalWrite(bluePin, HIGH);
-        digitalWrite(greenPin, HIGH);
-        //if (Serial) Serial.println("Red LED (controlTouched written)");
-      }
-      if(peripheralByte) {
-        digitalWrite(redPin, HIGH);
-        digitalWrite(bluePin, LOW);
-        digitalWrite(greenPin, HIGH);
-        //if (Serial) Serial.println("BLUE LED (peripheralTouched written)");
-        //if (Serial) Serial.println(peripheralTouched.read());
       }
     }
 
+    // while the central is still connected to peripheral:
+    while (central.connected()) {
+      startByte = 0;
+      //if (Serial) {
+        //if (Serial.available() > 0) {
+          //startByte = Serial.parseInt();
+          //while (startByte == 1) {
+
+            Serial.println("Ready");
+
+            if (controlTouched.written()) {
+              controlTouched.readValue(controlByte);
+            }
+
+            //Serial.println("Connected");
+            if(Serial.available() > 0) {
+              serialByte = Serial.parseInt();
+
+              //Serial.println(serialByte);
+              //Serial.println("\n");
+
+              switch(serialByte) {
+                case 1:
+                  peripheralTouched.writeValue((byte) 0);
+                  peripheralByte = 0;
+                  Serial.println("Sending 1");
+                  break;
+                case 2: 
+                  peripheralTouched.writeValue((byte) 1);
+                  peripheralByte = 1;
+                  Serial.println("Sending 2");
+                  break;
+                case 3:
+                  peripheralTouched.writeValue((byte) 2);
+                  peripheralByte = 2;
+                  Serial.println("Sending 3");
+
+                  while ((central.connected()) && (peripheralByte != 0)) {
+                    peripheralTouched.readValue(peripheralByte);
+                  }
+
+                  peripheralByte = 2;
+
+                  if (central.connected()) {
+                    central.disconnect();
+                  }
+              }
+            }
+
+            if (controlByte == 2) {
+              controlTouched.writeValue((byte) 0);
+              central.disconnect();
+            }
+
+            else if (peripheralByte && controlByte) {
+              digitalWrite(redPin, HIGH);
+              digitalWrite(bluePin, LOW);
+              //if (Serial) Serial.println("Red LED (controlTouched written)");
+            }
+
+            else if ((peripheralByte != 2) && (controlByte != 2)) {
+              digitalWrite(redPin, LOW);
+              digitalWrite(bluePin, HIGH);
+              //if (Serial) Serial.println("BLUE LED (peripheralTouched written)");
+              //if (Serial) Serial.println(peripheralTouched.read());
+            }
+          }
+        //}
+      //}
+    //}
+
+    peripheralTouched.writeValue((byte) 0);
+    controlTouched.writeValue((byte) 0);
+    peripheralByte = 0;
+    controlByte = 0;
     // when the central disconnects, print it out:
     if (Serial) Serial.print(F("Disconnected from central: "));
     if (Serial) Serial.println(central.address());
     digitalWrite(redPin, HIGH);
+    digitalWrite(greenPin, HIGH);
     digitalWrite(bluePin, HIGH);
+  }
+}
+
+void startConsent(BLEDevice central) {
+  if (Serial) {
+    Serial.println("We made it to Start Consent");
+    while ((central.connected()) && (startByte != 1)) {
+      Serial.println("HEREHEHEHEHEH");
+
+      if (controlTouched.written()) {
+        controlTouched.readValue(controlByte);
+        while (controlByte == 3) {
+          digitalWrite(redPin, LOW);
+          digitalWrite(bluePin, LOW);
+          Serial.println("ARE YOU READY???");
+          if (Serial.available() > 0) {
+            startByte = Serial.parseInt();
+            if (startByte == 1) {
+              controlTouched.writeValue((byte) 0);
+              controlByte = 1;
+            }
+          }
+        }
+      }
+
+      else if (Serial.available() > 0) {
+        startByte = Serial.parseInt();
+      }
+    }
+
+    if (central.connected() && (controlByte == 0)) {
+      peripheralTouched.writeValue((byte) 3);
+      peripheralByte = 3;
+      while (peripheralByte == 3) {
+        if (peripheralTouched.written()) {
+          peripheralTouched.readValue(peripheralByte);
+          Serial.println("WAITINGGGG");
+        }
+        Serial.println("2nd LOOP");
+      }
+    }
+
+    else {
+      controlByte = 0;
+    }
+
+    startByte = 0;
   }
 }
