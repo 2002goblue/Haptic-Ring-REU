@@ -117,13 +117,13 @@ void connectToPeripheral(){
 
   BLEDevice peripheral;
 
-  if(checkButton() == 4) {
-    //Serial Output:
-    Serial.println("Checkbutton == 4, Sending Connection Buzz");
+  // if(checkButton() == 4) {
+  //   //Serial Output:
+  //   Serial.println("Checkbutton == 4, Sending Connection Buzz");
 
-    lowPowerMode = true;
-    connectionBuzz(true);
-  }
+  //   lowPowerMode = true;
+  //   connectionBuzz(true);
+  // }
 
   if(!lowPowerMode) {
     //Serial Output:
@@ -157,39 +157,6 @@ void connectToPeripheral(){
     controlPeripheral(peripheral);
   }
 }
-
-// void connectToPeripheral(){
-//   BLEDevice peripheral;
-
-//   if(checkButton() == 4) {
-//     lowPowerMode = true;
-//     connectionBuzz(true);
-//   }
-//   if(!lowPowerMode) {
-//     do
-//     {
-//       BLE.scanForUuid(deviceService);
-//       peripheral = BLE.available();
-//       checkButton();
-//     } while (!peripheral);
-//   } else {
-//     //BLE.end();
-//     while (checkButton() != 4) {};
-//     connectionBuzz(true);
-//     lowPowerMode = false;
-//     //BLE.begin();
-//     ignoreUp = true;
-//     holdEventPast = true;
-//   }
-  
-//   if (peripheral) {
-//     //peripheral.address();
-//     //peripheral.localName();
-//     //peripheral.advertisedServiceUuid();
-//     BLE.stopScan();
-//     controlPeripheral(peripheral);
-//   }
-// }
 
 void lowPower() { 
   //Serial Output:

@@ -11,11 +11,6 @@ BLEService deviceService("19B10000-E8F2-537E-4F6C-D104768A1214"); // Bluetoothé€
 // Bluetoothé€Ÿ Low Energy LED Switch Characteristic - custom 128-bit UUID, read and writable by central
 BLEByteCharacteristic cTouched("19B10001-E8F2-537E-4F6C-D104768A1214", BLERead | BLEWrite | BLENotify);
 BLEByteCharacteristic pTouched("19B10002-E8F2-537E-4F6C-D104768A1214", BLERead | BLEWrite | BLENotify);
-BLEByteCharacteristic numOfSessions("19B10003-E8F2-537E-4F6C-D104768A1214", BLERead | BLEWrite | BLENotify);
-BLEByteCharacteristic numOfPInitiations("19B10004-E8F2-537E-4F6C-D104768A1214", BLERead | BLEWrite | BLENotify);
-BLEByteCharacteristic numOfCInitiations("19B10005-E8F2-537E-4F6C-D104768A1214", BLERead | BLEWrite | BLENotify);
-
-//BLEByteCharacteristic stopCharacteristic("19B10003-E8F2-537E-4F6C-D104768A1214", BLERead | BLEWrite);
 
 const int redPin = LEDR; // pin for red LED
 const int bluePin = LEDB; // pin for blue LED
@@ -126,9 +121,6 @@ void setup() {
   // add the characteristic to the service
   deviceService.addCharacteristic(cTouched);
   deviceService.addCharacteristic(pTouched);
-  deviceService.addCharacteristic(numOfSessions);
-  deviceService.addCharacteristic(numOfPInitiations);
-  deviceService.addCharacteristic(numOfCInitiations);
   //deviceService.addCharacteristic(stopCharacteristic);
   cTouched.setValue(0);
   pTouched.setValue(0);
