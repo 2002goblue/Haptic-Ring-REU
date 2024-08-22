@@ -38,6 +38,8 @@ const int initiateBuzzLength = 200;
 const int initiateLength = 1000;
 const int initiateIterations = 31; 
 
+bool ScanStatus;
+
 bool lowPowerMode = false;
 bool connected = false;
 
@@ -131,7 +133,9 @@ void connectToPeripheral(){
 
     do
     {
-      BLE.scanForUuid(deviceService);
+      ScanStatus = BLE.scanForUuid(deviceService);
+      Serial.println(deviceService);
+      Serial.println(ScanStatus);
       peripheral = BLE.available();
       if(checkButton() == 4) {
         connectionBuzz(true);

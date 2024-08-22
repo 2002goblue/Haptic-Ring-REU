@@ -249,7 +249,7 @@ void displaySession(dataStruct sessionArray) {
 
 
 void connectionBuzz(bool lowPowerModeActivated = false) {
-  //displaySessions();
+  displaySessions();
   int motorCycles;
   if(lowPowerModeActivated) {
     motorCycles = 3;
