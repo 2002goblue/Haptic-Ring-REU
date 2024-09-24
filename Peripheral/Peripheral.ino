@@ -20,8 +20,8 @@ Adafruit_DRV2605 drv;
 // Button timing variables
 int debounce = 20;          // ms debounce period to prevent flickering when pressing or releasing the button
 int DCgap = 250;            // max ms between clicks for a double click event
-int holdTime = 1500;        // ms hold period: how long to wait for press+hold event
-int longHoldTime = 4000;    // ms long hold period: how long to wait for press+hold event
+int holdTime = 300;        // ms hold period: how long to wait for press+hold event
+int longHoldTime = 2000;    // ms long hold period: how long to wait for press+hold event
 
 // Button variables
 boolean buttonVal = HIGH;   // value read from button
@@ -249,7 +249,7 @@ void displaySession(dataStruct sessionArray) {
 
 
 void connectionBuzz(bool lowPowerModeActivated = false) {
-  displaySessions();
+  //displaySessions();
   int motorCycles;
   if(lowPowerModeActivated) {
     motorCycles = 3;
@@ -291,12 +291,14 @@ void loop() {
   //Serial Output:
   Serial.println("Beginning of Loop Function");
 
-  if(checkButton() == 4) {
+  if(checkButton() == 3) {
     //Serial Output:
     Serial.println("Checkbutton == 4, Sending Connection Buzz");
 
     lowPowerMode = true;
     connectionBuzz(true);
+    holdEventPast = true;
+    longHoldEventPast = true;
   }
 
   if (lowPowerMode) {
@@ -304,7 +306,7 @@ void loop() {
     Serial.println("lowPowerMode on");
 
     BLE.stopAdvertise();
-    while (checkButton() != 4) {};
+    while (checkButton() != 3) {};
 
   //Serial Output:
     Serial.println("Button hold detected, beginning bluetooth");
@@ -314,6 +316,7 @@ void loop() {
     BLE.advertise();
     ignoreUp = true;
     holdEventPast = true;
+    longHoldEventPast = true;
   }
 
   // listen for Bluetooth速 Low Energy peripherals to connect:
@@ -453,6 +456,8 @@ void mainLoop(BLEDevice central, int &start, byte &cByte, byte &pByte) {
           if(controlSessionData.numOfSessions < structNumOfSessions) {
             controlSessionData.sessionArray[session].methodOfEnd = 1;
           }
+          holdEventPast = true;
+          longHoldEventPast = true;
           break;
         }
 
@@ -468,10 +473,11 @@ void mainLoop(BLEDevice central, int &start, byte &cByte, byte &pByte) {
     }
 
       switch (checkButton()) {
-        case 4:
+        case 2:
           //Serial Output:
-          Serial.println("case 4: writing pTouched to 2");
-
+          Serial.println("case 2: writing pTouched to 2");
+          holdEventPast = true;
+          longHoldEventPast = true;
           pTouched.writeValue((byte) 2);
           pByte = 0;
           start = 1;
@@ -497,6 +503,8 @@ void mainLoop(BLEDevice central, int &start, byte &cByte, byte &pByte) {
         if(controlSessionData.numOfSessions < structNumOfSessions) {
           controlSessionData.sessionArray[session].methodOfEnd = 0;
         }
+        holdEventPast = true;
+        longHoldEventPast = true;
         break;
       }
     }
@@ -552,15 +560,16 @@ void waitForStart(BLEDevice central, int &x, byte &pByte, byte &cByte) {
     //Serial.println("Button value: ");
     //Serial.println(i);
 
-    if (i == 4 || i == 3) {
+    if (i == 3) {
       //Serial Output:
       Serial.println("Disconnecting because long hold detected");
-
+      holdEventPast = true;
+      longHoldEventPast = true; 
       central.disconnect();
       lowPowerMode = true;
       return;
     }
-    if (i != 0) {
+    if (i != 0 && i != 4) {
       //Serial Output:
       Serial.println("i!=0, writing pTouched to 2");
 
@@ -586,9 +595,9 @@ void initiator(BLEDevice central, int &x, byte &pByte, byte &cByte) {
 
   while ((central.connected()) && (x == 1) && (count != initiateIterations)) {
 
-    if (checkButton() == 4) {
+    if (checkButton() == 2) {
       //Serial Output:
-      Serial.println("checkButton() == 4, setting pTouched to 4");
+      Serial.println("checkButton() == 2, setting pTouched to 4");
 
       pTouched.writeValue((byte) 4);
       x = 0;
@@ -672,7 +681,7 @@ void initiatee(BLEDevice central, byte &pByte, byte &cByte, int &x) {
     }
 
     switch (checkButton()) {
-      case 4:
+      case 2:
         //Serial Output:
         Serial.println("case 4: writing pTouched to 4");
 
@@ -742,7 +751,7 @@ int checkButton() {
     {
       event = 4;
       waitForUp = true;
-      holdEventPast = true;
+      //holdEventPast = true;
     }
     // Trigger "long" hold
     if ((millis() - downTime) >= longHoldTime)
@@ -750,7 +759,7 @@ int checkButton() {
       if (not longHoldEventPast)
       {
         event = 3;
-        longHoldEventPast = true;
+        //longHoldEventPast = true;
       }
     }
   }

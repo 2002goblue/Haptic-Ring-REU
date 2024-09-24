@@ -17,8 +17,8 @@ Adafruit_DRV2605 drv;
 // Button timing variables
 int debounce = 20;          // ms debounce period to prevent flickering when pressing or releasing the button
 int DCgap = 250;            // max ms between clicks for a double click event
-int holdTime = 1500;        // ms hold period: how long to wait for press+hold event
-int longHoldTime = 4000;    // ms long hold period: how long to wait for press+hold event
+int holdTime = 300;        // ms hold period: how long to wait for press+hold event
+int longHoldTime = 2000;    // ms long hold period: how long to wait for press+hold event
 
 // Button variables
 boolean buttonVal = HIGH;   // value read from button
@@ -137,8 +137,10 @@ void connectToPeripheral(){
       Serial.println(deviceService);
       Serial.println(ScanStatus);
       peripheral = BLE.available();
-      if(checkButton() == 4) {
+      if(checkButton() == 3) {
         connectionBuzz(true);
+        holdEventPast = true;
+        longHoldEventPast = true;
         lowPower();
       }
     } while (!peripheral);
@@ -168,7 +170,7 @@ void lowPower() {
 
     //BLE.end();
     BLE.stopScan();
-    while (checkButton() != 4) {};
+    while (checkButton() != 3) {};
 
     //Serial Output:
     Serial.println("Button hold detected, beginning bluetooth");
@@ -178,6 +180,7 @@ void lowPower() {
     //BLE.begin();
     ignoreUp = true;
     holdEventPast = true;
+    longHoldEventPast = true;
 }
 
 void controlPeripheral(BLEDevice peripheral) {
@@ -307,6 +310,8 @@ void mainLoop(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacteristi
         }
 
         if (pByte == 2) {
+          holdEventPast = true;
+          longHoldEventPast = true;
           break;
         }
 
@@ -317,10 +322,11 @@ void mainLoop(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacteristi
     }
 
     switch(checkButton()) {
-      case 4:
+      case 2:
         //Serial Output:
-        Serial.println("case 4: writing cTouched to 2");
-
+        Serial.println("case 2: writing cTouched to 2");
+        holdEventPast = true;
+        longHoldEventPast = true;
         cTouched.writeValue((byte) 2);
         cByte = 0;
         start = 1;
@@ -336,6 +342,8 @@ void mainLoop(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacteristi
     }
 
     if (millis() > time + consentDuration) {
+      holdEventPast = true;
+      longHoldEventPast = true;
       break;
     }
   }
@@ -398,16 +406,17 @@ void waitForStart(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacter
     //Serial.println("Button value: ");
     //Serial.println(i);
 
-    if (i == 4 || i == 3) {
+    if (i == 3) {
       //Serial Output:
       Serial.println("Disconnecting because long hold detected");
-
+      holdEventPast = true;
+      longHoldEventPast = true;
       peripheral.disconnect();
       lowPowerMode = true;
       return;
     }
 
-    if (i != 0) {
+    if (i != 0 && i != 4) {
       //Serial Output:
       Serial.println("i!=0, writing cTouched to 2");
 
@@ -434,7 +443,7 @@ void initiator(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacterist
 
   while ((peripheral.connected()) && (x == 1) && (count != initiateIterations)) {
     
-    if (checkButton() == 4) {
+    if (checkButton() == 2) {
       //Serial Output:
       Serial.println("checkButton() == 4, setting cTouched to 4");
 
@@ -507,6 +516,21 @@ void initiatee(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacterist
       }
     }
 
+    //   if(millis() < (time + initiateBuzzLength)) {
+    //   drv.setRealtimeValue(initiateStrength);
+    //   digitalWrite(redPin, LOW);
+    //   count++;
+    // }
+
+    // if(millis() > (time + initiateBuzzLength)) {
+    //   digitalWrite(redPin, HIGH);
+    //   drv.setRealtimeValue(0);
+    // }
+
+    // if(millis() >= (time + initiateLength)) {
+    //   time = millis();
+    // }
+
     if (millis() > (time + initiateLength)) {
       drv.setRealtimeValue(initiateStrength);
       digitalWrite(redPin, LOW);
@@ -520,7 +544,7 @@ void initiatee(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacterist
     }
 
     switch(checkButton()) {
-      case 4:
+      case 2:
         //Serial Output:
         Serial.println("case 4: writing cTouched to 4");
 
@@ -593,7 +617,7 @@ int checkButton() {
       {
         event = 4;
         waitForUp = true;
-        holdEventPast = true;
+        //holdEventPast = true;
       }
        // Trigger "long" hold
        if ((millis() - downTime) >= longHoldTime)
@@ -601,7 +625,7 @@ int checkButton() {
            if (not longHoldEventPast)
            {
                event = 3;
-               longHoldEventPast = true;
+               //longHoldEventPast = true;
            }
        }
    }
