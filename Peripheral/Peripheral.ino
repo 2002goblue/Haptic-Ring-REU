@@ -332,15 +332,14 @@ void loop() {
     
     while (central.connected()) {
       int start = 0;
-      int x = 2;
+      int loopControl = 2;
       byte cByte = 0;
       byte pByte = 0;
 
-      waitForStart(central, x, pByte, cByte);
+      waitForStart(central, loopControl, pByte, cByte);
 
-      if (x == 1) {
-        initiator(central, x, pByte, cByte);
-
+      if (loopControl == 1) {
+        initiator(central, loopControl, pByte, cByte);
         if(controlSessionData.numOfPInitiations < structNumOfInits) {
           controlSessionData.pInitTimes[controlSessionData.numOfPInitiations] = millis();
           controlSessionData.numOfPInitiations++;
@@ -348,8 +347,8 @@ void loop() {
         lastInitiator = 1;
       }
 
-      else if (x == 0) {
-        initiatee(central, pByte, cByte, x);
+      else if (loopControl == 0) {
+        initiatee(central, pByte, cByte, loopControl);
         //Set initiator to Control
         lastInitiator = 0;
         if(controlSessionData.numOfCInitiations < structNumOfInits) {
@@ -358,8 +357,7 @@ void loop() {
         }
       }
 
-      if (x == 2 && central.connected()) {
-        //Serial.println("1");
+      if (loopControl == 2 && central.connected()) {
         mainLoop(central, start, cByte, pByte);
         //displaySession(controlSessionData.sessionArray[controlSessionData.numOfSessions]);
         if(controlSessionData.numOfSessions < structNumOfSessions) {
@@ -392,8 +390,6 @@ void mainLoop(BLEDevice central, int &start, byte &cByte, byte &pByte) {
   digitalWrite(redPin, HIGH);
   unsigned long time = millis();
 
-  //Serial.println("2");
-
   if(central.connected()) {
     if(controlSessionData.numOfSessions < structNumOfSessions) {
       session = controlSessionData.numOfSessions++;
@@ -401,14 +397,10 @@ void mainLoop(BLEDevice central, int &start, byte &cByte, byte &pByte) {
     }
   }
 
-  //Serial.println("3");
-
   // while the central is still connected to peripheral:
   while ((central.connected()) && (start != 1)) {
 
     drv.setRealtimeValue(map(time + consentDuration - millis(), 0, consentDuration, 30, 127));
-
-    
 
     if (cTouched.written()) {
       cTouched.readValue(cByte);
@@ -416,60 +408,51 @@ void mainLoop(BLEDevice central, int &start, byte &cByte, byte &pByte) {
       //Serial Output:
       Serial.println("cTouched value updated: ");
       Serial.println(cByte);
-      //Serial.println("pLast before update: ");
-      //Serial.println(pLast);
       Serial.println("pByte before update: ");
       Serial.println(pByte);
       
-      //pLast = pByte;
-      //pTouched.readValue(pByte);
 
       //Serial Output:
       Serial.println("pByte newly read: ");
       Serial.println(pByte);
 
-      //if(pByte == pLast) {
+      if (cByte == 1) {
+        if(controlSessionData.numOfSessions < structNumOfSessions && controlSessionData.sessionArray[session].reUps < structNumOfReUps) {
+          controlSessionData.sessionArray[session].attemptedC[controlSessionData.sessionArray[session].reUps]++;
+        }
+      }
+
+      if ((cByte == 1) && (pByte == 1)) {
         //Serial Output:
-        //Serial.println("pLast == pByte");
+        Serial.println("cByte == 1 && pByte == 1, writing pTouched to 3");
 
-        if (cByte == 1) {
-          if(controlSessionData.numOfSessions < structNumOfSessions && controlSessionData.sessionArray[session].reUps < structNumOfReUps) {
-            controlSessionData.sessionArray[session].attemptedC[controlSessionData.sessionArray[session].reUps]++;
-          }
+        pTouched.writeValue((byte) 3);
+        pByte = 3;
+        timer(cByte, pByte, time);
+        if(controlSessionData.numOfSessions < structNumOfSessions && controlSessionData.sessionArray[session].reUps < structNumOfReUps) {
+          controlSessionData.sessionArray[session].reUpTime[controlSessionData.sessionArray[session].reUps] = millis();
+          controlSessionData.sessionArray[session].reUps++;
         }
 
-        if ((cByte == 1) && (pByte == 1)) {
-          //Serial Output:
-          Serial.println("cByte == 1 && pByte == 1, writing pTouched to 3");
+      }
 
-          pTouched.writeValue((byte) 3);
-          pByte = 3;
-          timer(cByte, pByte, time);
-          if(controlSessionData.numOfSessions < structNumOfSessions && controlSessionData.sessionArray[session].reUps < structNumOfReUps) {
-            controlSessionData.sessionArray[session].reUpTime[controlSessionData.sessionArray[session].reUps] = millis();
-            controlSessionData.sessionArray[session].reUps++;
-          }
-
+      if (cByte == 2) {
+        if(controlSessionData.numOfSessions < structNumOfSessions) {
+          controlSessionData.sessionArray[session].methodOfEnd = 1;
         }
+        holdEventPast = true;
+        longHoldEventPast = true;
+        break;
+      }
 
-        if (cByte == 2) {
-          if(controlSessionData.numOfSessions < structNumOfSessions) {
-            controlSessionData.sessionArray[session].methodOfEnd = 1;
-          }
-          holdEventPast = true;
-          longHoldEventPast = true;
-          break;
+      if (cByte == 3) {
+        //Serial.println("3 RECIEVED");
+        timer(cByte, pByte, time);
+        if(controlSessionData.numOfSessions < structNumOfSessions && controlSessionData.sessionArray[session].reUps < structNumOfReUps) {
+          controlSessionData.sessionArray[session].reUpTime[controlSessionData.sessionArray[session].reUps] = millis();
+          controlSessionData.sessionArray[session].reUps++;
         }
-
-        if (cByte == 3) {
-          //Serial.println("3 RECIEVED");
-          timer(cByte, pByte, time);
-          if(controlSessionData.numOfSessions < structNumOfSessions && controlSessionData.sessionArray[session].reUps < structNumOfReUps) {
-            controlSessionData.sessionArray[session].reUpTime[controlSessionData.sessionArray[session].reUps] = millis();
-            controlSessionData.sessionArray[session].reUps++;
-          }
-        }
-      //}
+      }
     }
 
       switch (checkButton()) {
@@ -528,13 +511,14 @@ void timer(byte &cByte, byte &pByte, unsigned long &time) {
   pByte = 0;
 }
 
-void waitForStart(BLEDevice central, int &x, byte &pByte, byte &cByte) {
+void waitForStart(BLEDevice central, int &loopControl, byte &pByte, byte &cByte) {
   //Serial Output:
   Serial.println("Entered waitForStart");
 
   int i;
   ignoreUp = true;
   holdEventPast = true;
+  longHoldEventPast = true;
   while (central.connected()) {
 
     if (cTouched.written()) {
@@ -550,7 +534,7 @@ void waitForStart(BLEDevice central, int &x, byte &pByte, byte &cByte) {
 
         //cTouched.writeValue((byte) 0);
         cByte = 0;
-        x = 0;
+        loopControl = 0;
         break;
       }
     }
@@ -572,10 +556,12 @@ void waitForStart(BLEDevice central, int &x, byte &pByte, byte &cByte) {
     if (i != 0 && i != 4) {
       //Serial Output:
       Serial.println("i!=0, writing pTouched to 2");
+      Serial.println(i);
+      Serial.println(ignoreUp);
 
       pTouched.writeValue((byte) 2);
       pByte = 0;
-      x = 1;
+      loopControl = 1;
       break;
     }
   }
@@ -585,22 +571,24 @@ void waitForStart(BLEDevice central, int &x, byte &pByte, byte &cByte) {
   if(!central.connected()) Serial.println("Due to disconnect");
 }
 
-void initiator(BLEDevice central, int &x, byte &pByte, byte &cByte) {
+void initiator(BLEDevice central, int &loopControl, byte &pByte, byte &cByte) {
   //Serial Output:
   Serial.println("Entering Initiator");
+  holdEventPast = true;
+  longHoldEventPast = true;
+  ignoreUp = true;
 
   unsigned long time = millis();
   int count = 0;
-  int y;
 
-  while ((central.connected()) && (x == 1) && (count != initiateIterations)) {
+  while ((central.connected()) && (count != initiateIterations)) {
 
     if (checkButton() == 2) {
       //Serial Output:
       Serial.println("checkButton() == 2, setting pTouched to 4");
 
       pTouched.writeValue((byte) 4);
-      x = 0;
+      loopControl = 0;
       break;
     }
 
@@ -619,18 +607,6 @@ void initiator(BLEDevice central, int &x, byte &pByte, byte &cByte) {
       count++;
     }
 
-    // if (millis() > (time + initiateLength)) {
-    //   drv.setRealtimeValue(initiateStrength);
-    //   digitalWrite(redPin, LOW);
-    //   time = millis();
-    //   count++;
-    // }
-
-    // if ((millis() > (time + initiateBuzzLength)) && (millis() < (time + initiateBuzzLength + 100))) {
-    //   digitalWrite(redPin, HIGH);
-    //   drv.setRealtimeValue(0);
-    // }
-
     if (cTouched.written()) {
       cTouched.readValue(cByte);
 
@@ -639,17 +615,16 @@ void initiator(BLEDevice central, int &x, byte &pByte, byte &cByte) {
       Serial.println(cByte);
 
       if (cByte == 4) {
-        x = 0;
+        loopControl = 0;
         break;
-      }
-
-      if (cByte == 2) {
+      } else if (cByte == 2) {
         //Serial Output:
         Serial.println("cByte == 2, setting cTouched to 0");
 
         //cTouched.writeValue((byte) 0);
         cByte = 0;
-        x = 2;
+        loopControl = 2;
+        break;
       }
     }
   }
@@ -659,15 +634,18 @@ void initiator(BLEDevice central, int &x, byte &pByte, byte &cByte) {
   drv.setRealtimeValue(0);
 }
 
-void initiatee(BLEDevice central, byte &pByte, byte &cByte, int &x) {
+void initiatee(BLEDevice central, byte &pByte, byte &cByte, int &loopControl) {
   //Serial Output:
   Serial.println("Entering initiatee");
-  
+  holdEventPast = true;
+  longHoldEventPast = true;
+  ignoreUp = true;
+
   int i;
   unsigned long time = millis();
   int count = 0;
 
-  while ((central.connected()) && (x == 0) && (count != initiateIterations)) {
+  while ((central.connected()) && (loopControl == 0) && (count != initiateIterations)) {
 
     if (cTouched.written()) {
       cTouched.readValue(cByte);
@@ -678,7 +656,7 @@ void initiatee(BLEDevice central, byte &pByte, byte &cByte, int &x) {
 
       if (cByte == 4) {
         cByte = 0;
-        x = 1;
+        loopControl = 1;
         break;
       }
     }
@@ -698,26 +676,13 @@ void initiatee(BLEDevice central, byte &pByte, byte &cByte, int &x) {
       count++;
     }
 
-
-    // if (millis() > (time + initiateLength)) {
-    //   digitalWrite(redPin, LOW);
-    //   drv.setRealtimeValue(initiateStrength);
-    //   time = millis();
-    //   count++;
-    // }
-
-    // if ((millis() > (time + initiateBuzzLength)) && (millis() < (time + initiateBuzzLength + 100))) {
-    //   digitalWrite(redPin, HIGH);
-    //   drv.setRealtimeValue(0);
-    // }
-
     switch (checkButton()) {
       case 2:
         //Serial Output:
         Serial.println("case 4: writing pTouched to 4");
 
         pTouched.writeValue((byte) 4);
-        x = 1;
+        loopControl = 1;
         break;
       default:
         //Serial Output:
@@ -725,7 +690,7 @@ void initiatee(BLEDevice central, byte &pByte, byte &cByte, int &x) {
 
         pTouched.writeValue((byte) 2);
         pByte = 0;
-        x = 2;
+        loopControl = 2;
         break;
       case 0:
         break;
@@ -772,8 +737,10 @@ int checkButton() {
   // Test for normal click event: DCgap expired
   if ( buttonVal == HIGH && (millis() - upTime) >= DCgap && DCwaiting == true && DConUp == false && singleOK == true && event != 2)
   {
-    event = 1;
-    DCwaiting = false;
+    if(not ignoreUp) {
+      event = 1;
+      DCwaiting = false;
+    }
   }
   // Test for hold
   if (buttonVal == LOW && (millis() - downTime) >= holdTime) {
@@ -794,10 +761,6 @@ int checkButton() {
       }
     }
   }
-
-
-
-
   buttonLast = buttonVal;
   return event;
 }

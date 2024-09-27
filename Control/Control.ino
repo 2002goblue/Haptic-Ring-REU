@@ -5,7 +5,7 @@
 #include "Adafruit_DRV2605.h"
 
 #define buttonPin 1        // analog input pin to use as a digital input
-
+ 
 const char* deviceService = "19B10000-E8F2-537E-4F6C-D104768A1214";
 const char* controlTouchedCharacteristic = "19B10001-E8F2-537E-4F6C-D104768A1214";
 const char* peripheralTouchedCharacteristic = "19B10002-E8F2-537E-4F6C-D104768A1214";
@@ -119,14 +119,6 @@ void connectToPeripheral(){
 
   BLEDevice peripheral;
 
-  // if(checkButton() == 4) {
-  //   //Serial Output:
-  //   Serial.println("Checkbutton == 4, Sending Connection Buzz");
-
-  //   lowPowerMode = true;
-  //   connectionBuzz(true);
-  // }
-
   if(!lowPowerMode) {
     //Serial Output:
     Serial.println("lowPowerMode = false");
@@ -239,21 +231,21 @@ void controlPeripheral(BLEDevice peripheral) {
   while (peripheral.connected()) {
 
     int start = 0;
-    int x = 2;
+    int loopControl = 2;
     byte cByte = 0;
     byte pByte = 0;
 
-    waitForStart(peripheral, cTouched, pTouched, x, cByte, pByte);
+    waitForStart(peripheral, cTouched, pTouched, loopControl, cByte, pByte);
 
-    if (x == 1) {
-      initiator(peripheral, cTouched, pTouched, x, cByte, pByte);
+    if (loopControl == 1) {
+      initiator(peripheral, cTouched, pTouched, loopControl, cByte, pByte);
     }
       
-    else if (x == 0) {
-      initiatee(peripheral, cTouched, pTouched, cByte, pByte, x);
+    else if (loopControl == 0) {
+      initiatee(peripheral, cTouched, pTouched, cByte, pByte, loopControl);
     }
 
-    if (x == 2) {
+    if (loopControl == 2) {
       mainLoop(peripheral, cTouched, pTouched, start, cByte, pByte);
     }
 
@@ -284,41 +276,30 @@ void mainLoop(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacteristi
       //Serial Output:
       Serial.println("pTouched value updated: ");
       Serial.println(pByte);
-      //Serial.println("cLast before update: ");
-      //Serial.println(cLast);
       Serial.println("cByte before update: ");
       Serial.println(cByte);
 
-      //cLast = cByte;
-      //cTouched.readValue(cByte);
-
       //Serial Output:
-      //Serial.println("cByte newly read: ");
-      //Serial.println(cByte);
+      Serial.println("cLast == cByte");
 
-      //if(cLast == cByte) {
+      if ((cByte == 1) && (pByte == 1)) {
         //Serial Output:
-        Serial.println("cLast == cByte");
+        Serial.println("cByte == 1 && pByte == 1, writing cTouched to 3");
 
-        if ((cByte == 1) && (pByte == 1)) {
-          //Serial Output:
-          Serial.println("cByte == 1 && pByte == 1, writing cTouched to 3");
+        cTouched.writeValue((byte) 3);
+        cByte = 3;
+        timer(cTouched, pTouched, cByte, pByte, time);
+      }
 
-          cTouched.writeValue((byte) 3);
-          cByte = 3;
-          timer(cTouched, pTouched, cByte, pByte, time);
-        }
+      if (pByte == 2) {
+        holdEventPast = true;
+        longHoldEventPast = true;
+        break;
+      }
 
-        if (pByte == 2) {
-          holdEventPast = true;
-          longHoldEventPast = true;
-          break;
-        }
-
-        if (pByte == 3) {
-          timer (cTouched, pTouched, cByte, pByte, time);
-        }
-      //}
+      if (pByte == 3) {
+        timer (cTouched, pTouched, cByte, pByte, time);
+      }
     }
 
     switch(checkButton()) {
@@ -365,22 +346,14 @@ void timer(BLECharacteristic cTouched, BLECharacteristic pTouched, byte &cByte, 
   cByte = 0;
 }
 
-void waitForStart(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacteristic pTouched, int &x, byte &cByte, byte &pByte) {
+void waitForStart(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacteristic pTouched, int &loopControl, byte &cByte, byte &pByte) {
   //Serial Output:
   Serial.println("Entered waitForStart");
-
-  // pTouched.readValue(pByte);
-  // if (pByte == 2) {
-
-  //   Serial.println("Found 2 early");
-  //   pByte = 0;
-  //   x = 0;
-  //   return;
-  // }
 
   int i;
   ignoreUp = true;
   holdEventPast = true;
+  longHoldEventPast = true;
   while (peripheral.connected()) {
 
     if (pTouched.valueUpdated()) {
@@ -396,15 +369,12 @@ void waitForStart(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacter
 
         //pTouched.writeValue((byte) 0);
         pByte = 0;
-        x = 0;
+        loopControl = 0;
         break;
       }
     }
 
     i = checkButton();
-    //Serial Output:
-    //Serial.println("Button value: ");
-    //Serial.println(i);
 
     if (i == 3) {
       //Serial Output:
@@ -422,7 +392,7 @@ void waitForStart(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacter
 
       cTouched.writeValue((byte) 2);
       cByte = 0;
-      x = 1;
+      loopControl = 1;
       break;
     }
   }
@@ -433,15 +403,17 @@ void waitForStart(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacter
 
 }
 
-void initiator(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacteristic pTouched, int &x, byte &cByte, byte &pByte) {
+void initiator(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacteristic pTouched, int &loopControl, byte &cByte, byte &pByte) {
   //Serial Output:
   Serial.println("Entering Initiator");
+  holdEventPast = true;
+  longHoldEventPast = true;
+  ignoreUp = true;
 
   unsigned long time = millis();
   int count = 0;
-  int y;
 
-  while ((peripheral.connected()) && (x == 1) && (count != initiateIterations)) {
+  while ((peripheral.connected()) && (count != initiateIterations)) {
     
     if (checkButton() == 2) {
       //Serial Output:
@@ -449,16 +421,14 @@ void initiator(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacterist
 
       cTouched.writeValue((byte) 4);
       cByte = 4;
-      x = 0;
+      loopControl = 0;
       break;
     }
 
     if(millis() < (time + initiateBuzzLength)) {
       drv.setRealtimeValue(initiateStrength);
       digitalWrite(redPin, LOW);
-    }
-
-    if(millis() > (time + initiateBuzzLength)) {
+    } else {
       digitalWrite(redPin, HIGH);
       drv.setRealtimeValue(0);
     }
@@ -467,19 +437,6 @@ void initiator(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacterist
       time = millis();
       count++;
     }
-
-
-    // if (millis() > (time + initiateLength)) {
-    //   drv.setRealtimeValue(initiateStrength);
-    //   digitalWrite(redPin, LOW);
-    //   time = millis();
-    //   count++;
-    // }
-
-    // if ((millis() > (time + initiateBuzzLength)) && (millis() < (time + initiateBuzzLength + 100))) {
-    //   digitalWrite(redPin, HIGH);
-    //   drv.setRealtimeValue(0);
-    // }
 
     if (pTouched.valueUpdated()) {
       pTouched.readValue(pByte);
@@ -490,16 +447,16 @@ void initiator(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacterist
 
       if (pByte == 4) {
         pByte = 0;
-        x = 0;
+        loopControl = 0;
         break;
-      }
-      if (pByte == 2) {
+      } else if (pByte == 2) {
         //Serial Output:
         Serial.println("pByte == 2, setting pTouched to 0");
 
         //pTouched.writeValue((byte) 0);
         pByte = 0;
-        x = 2;
+        loopControl = 2;
+        break;
       }
     }
   } 
@@ -509,15 +466,18 @@ void initiator(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacterist
   drv.setRealtimeValue(0);
 }
 
-void initiatee(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacteristic pTouched, byte cByte, byte pByte, int &x) {
+void initiatee(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacteristic pTouched, byte cByte, byte pByte, int &loopControl) {
   //Serial Output:
   Serial.println("Entering initiatee");
+  holdEventPast = true;
+  longHoldEventPast = true;
+  ignoreUp = true;
 
   int i;
   unsigned long time = millis();
   int count = 0;
 
-  while ((peripheral.connected()) && (x == 0) && (count != initiateIterations)) {
+  while ((peripheral.connected()) && (loopControl == 0) && (count != initiateIterations)) {
 
     if (pTouched.valueUpdated()) {
       pTouched.readValue(pByte);
@@ -527,7 +487,7 @@ void initiatee(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacterist
 
       if (pByte == 4) {
         pByte = 0;
-        x = 1;
+        loopControl = 1;
         break;
       }
     }
@@ -535,9 +495,7 @@ void initiatee(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacterist
     if(millis() < (time + initiateBuzzLength)) {
       drv.setRealtimeValue(initiateStrength);
       digitalWrite(redPin, LOW);
-    }
-
-    if(millis() > (time + initiateBuzzLength)) {
+    } else {
       digitalWrite(redPin, HIGH);
       drv.setRealtimeValue(0);
     }
@@ -547,18 +505,6 @@ void initiatee(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacterist
       count++;
     }
 
-    // if (millis() > (time + initiateLength)) {
-    //   drv.setRealtimeValue(initiateStrength);
-    //   digitalWrite(redPin, LOW);
-    //   time = millis();
-    //   count++;
-    // }
-
-    // if ((millis() > (time + initiateBuzzLength)) && (millis() < (time + initiateBuzzLength + 100))) {
-    //   digitalWrite(redPin, HIGH);
-    //   drv.setRealtimeValue(0);
-    // }
-
     switch(checkButton()) {
       case 2:
         //Serial Output:
@@ -566,7 +512,7 @@ void initiatee(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacterist
 
         cTouched.writeValue((byte) 4);
         cByte = 4;
-        x = 1;
+        loopControl = 1;
         break;
       default:
         //Serial Output:
@@ -574,10 +520,9 @@ void initiatee(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacterist
 
         cTouched.writeValue((byte) 2);
         cByte = 0;
-        x = 2;
+        loopControl = 2;
         break;
       case 0:
-
         break;
     }
   }
@@ -623,8 +568,10 @@ int checkButton() {
    // Test for normal click event: DCgap expired
    if ( buttonVal == HIGH && (millis()-upTime) >= DCgap && DCwaiting == true && DConUp == false && singleOK == true && event != 2)
    {  
-       event = 1;
-       DCwaiting = false;
+      if(not ignoreUp) {
+        event = 1;
+        DCwaiting = false;
+      }
    }
    // Test for hold
    if (buttonVal == LOW && (millis() - downTime) >= holdTime) {
