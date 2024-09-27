@@ -39,7 +39,7 @@ boolean longHoldEventPast = false;// whether or not the long hold event happened
 const int initiateStrength = 127;
 const int initiateBuzzLength = 200;
 const int initiateLength = 1000;
-const int initiateIterations = 31;
+const int initiateIterations = 30;
 
 bool lowPowerMode = false;
 bool connected = false;
@@ -604,17 +604,32 @@ void initiator(BLEDevice central, int &x, byte &pByte, byte &cByte) {
       break;
     }
 
-    if (millis() > (time + initiateLength)) {
+    if(millis() < (time + initiateBuzzLength)) {
       drv.setRealtimeValue(initiateStrength);
       digitalWrite(redPin, LOW);
+    }
+
+    if(millis() > (time + initiateBuzzLength)) {
+      digitalWrite(redPin, HIGH);
+      drv.setRealtimeValue(0);
+    }
+
+    if(millis() >= (time + initiateLength)) {
       time = millis();
       count++;
     }
 
-    if ((millis() > (time + initiateBuzzLength)) && (millis() < (time + initiateBuzzLength + 100))) {
-      digitalWrite(redPin, HIGH);
-      drv.setRealtimeValue(0);
-    }
+    // if (millis() > (time + initiateLength)) {
+    //   drv.setRealtimeValue(initiateStrength);
+    //   digitalWrite(redPin, LOW);
+    //   time = millis();
+    //   count++;
+    // }
+
+    // if ((millis() > (time + initiateBuzzLength)) && (millis() < (time + initiateBuzzLength + 100))) {
+    //   digitalWrite(redPin, HIGH);
+    //   drv.setRealtimeValue(0);
+    // }
 
     if (cTouched.written()) {
       cTouched.readValue(cByte);
@@ -668,17 +683,33 @@ void initiatee(BLEDevice central, byte &pByte, byte &cByte, int &x) {
       }
     }
 
-    if (millis() > (time + initiateLength)) {
-      digitalWrite(redPin, LOW);
+    if(millis() < (time + initiateBuzzLength)) {
       drv.setRealtimeValue(initiateStrength);
+      digitalWrite(redPin, LOW);
+    }
+
+    if(millis() > (time + initiateBuzzLength)) {
+      digitalWrite(redPin, HIGH);
+      drv.setRealtimeValue(0);
+    }
+
+    if(millis() >= (time + initiateLength)) {
       time = millis();
       count++;
     }
 
-    if ((millis() > (time + initiateBuzzLength)) && (millis() < (time + initiateBuzzLength + 100))) {
-      digitalWrite(redPin, HIGH);
-      drv.setRealtimeValue(0);
-    }
+
+    // if (millis() > (time + initiateLength)) {
+    //   digitalWrite(redPin, LOW);
+    //   drv.setRealtimeValue(initiateStrength);
+    //   time = millis();
+    //   count++;
+    // }
+
+    // if ((millis() > (time + initiateBuzzLength)) && (millis() < (time + initiateBuzzLength + 100))) {
+    //   digitalWrite(redPin, HIGH);
+    //   drv.setRealtimeValue(0);
+    // }
 
     switch (checkButton()) {
       case 2:
