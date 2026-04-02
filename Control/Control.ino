@@ -1,185 +1,206 @@
-//CODE WORKSPACE (SAVE CODE FROM THIS ONE TO VERSION UPDATES AT IMPORTANT MILESTONES, BUT THIS ONE ALWAYS REMAINS WORKSPACE)
+// BuzzControl - Central/Scanner Device
+// Scans for and connects to the BuzzPeripheral device.
+// Writes to cTouched, reads from pTouched.
 
 #include <ArduinoBLE.h>
 #include <Wire.h>
 #include "Adafruit_DRV2605.h"
 
-#define buttonPin 1        // analog input pin to use as a digital input
- 
-const char* deviceService = "19B10000-E8F2-537E-4F6C-D104768A1214";
-const char* controlTouchedCharacteristic = "19B10001-E8F2-537E-4F6C-D104768A1214";
-const char* peripheralTouchedCharacteristic = "19B10002-E8F2-537E-4F6C-D104768A1214";
-const int redPin = LEDR; // pin for red LED
-const int bluePin = LEDB; // pin for blue LED
-const int greenPin = LEDG; // pin for green LED
-Adafruit_DRV2605 drv;
+// ── Pin Definitions ──────────────────────────────────────────────
+#define BUTTON_PIN 1
 
-// Button timing variables
-int debounce = 20;          // ms debounce period to prevent flickering when pressing or releasing the button
-int DCgap = 250;            // max ms between clicks for a double click event
-int holdTime = 300;        // ms hold period: how long to wait for press+hold event
-int longHoldTime = 2000;    // ms long hold period: how long to wait for press+hold event
+const int RED_PIN   = LEDR;
+const int GREEN_PIN = LEDG;
+const int BLUE_PIN  = LEDB;
 
-// Button variables
-boolean buttonVal = HIGH;   // value read from button
-boolean buttonLast = HIGH;  // buffered value of the button's previous state
-boolean DCwaiting = false;  // whether we're waiting for a double click (down)
-boolean DConUp = false;     // whether to register a double click on next release, or whether to wait and click
-boolean singleOK = true;    // whether it's OK to do a single click
-long downTime = -1;         // time the button was pressed down
-long upTime = -1;           // time the button was released
-boolean ignoreUp = false;   // whether to ignore the button release because the click+hold was triggered
-boolean waitForUp = false;        // when held, whether to wait for the up event
-boolean holdEventPast = false;    // whether or not the hold event happened already
-boolean longHoldEventPast = false;// whether or not the long hold event happened already
+// ── BLE UUIDs ────────────────────────────────────────────────────
+const char* SERVICE_UUID   = "19B10000-E8F2-537E-4F6C-D104768A1214";
+const char* C_TOUCHED_UUID = "19B10001-E8F2-537E-4F6C-D104768A1214";
+const char* P_TOUCHED_UUID = "19B10002-E8F2-537E-4F6C-D104768A1214";
 
-const int initiateStrength = 127;
-const int initiateBuzzLength = 200;
-const int initiateLength = 1000;
-const int initiateIterations = 30; 
+// ── BLE Signal Values ────────────────────────────────────────────
+const byte SIG_NONE     = 0;  // Idle / reset
+const byte SIG_PRESSING = 1;  // MainLoop: "I'm pressing my button"
+const byte SIG_INITIATE = 2;  // WaitForStart: "I want to initiate" / Initiatee: "I accept" / MainLoop: "End session"
+const byte SIG_REUP     = 3;  // MainLoop: "Mutual consent confirmed, reset timer"
+const byte SIG_CANCEL   = 4;  // Initiator/Initiatee: "Cancel the initiation"
 
-bool ScanStatus;
+// ── Loop State Values ────────────────────────────────────────────
+const int STATE_INITIATEE = 0;
+const int STATE_INITIATOR = 1;
+const int STATE_MAIN_LOOP = 2;
 
-bool lowPowerMode = false;
-bool connected = false;
+// ── Button Event Values ──────────────────────────────────────────
+const int BTN_NONE        = 0;
+const int BTN_SINGLE      = 1;
+const int BTN_DOUBLE      = 2;
+const int BTN_LONG_HOLD   = 3;
+const int BTN_HOLD        = 4;
 
-int connectionBuzzOnLength = 200;
+// ── Initiation Parameters ────────────────────────────────────────
+const int INITIATE_STRENGTH    = 127;
+const int INITIATE_BUZZ_LENGTH = 200;   // ms buzz on per cycle
+const int INITIATE_CYCLE_LEN   = 1000;  // ms total per initiation cycle
+const int INITIATE_MAX_CYCLES  = 30;
+
+// ── Consent Timer ────────────────────────────────────────────────
+const unsigned long CONSENT_DURATION = 30000;  // ms
+
+// ── Connection Buzz ──────────────────────────────────────────────
+int connectionBuzzOnLength  = 200;
 int connectionBuzzOffLength = 100;
 
-const int consentDuration = 30000;
+// ── Button Timing ────────────────────────────────────────────────
+const int DEBOUNCE_MS    = 20;
+const int DC_GAP_MS      = 250;
+const int HOLD_TIME_MS   = 300;
+const int LONG_HOLD_MS   = 2000;
 
-byte cLast;
+// ── Button State ─────────────────────────────────────────────────
+boolean buttonVal          = HIGH;
+boolean buttonLast         = HIGH;
+boolean DCwaiting          = false;
+boolean DConUp             = false;
+boolean singleOK           = true;
+long    downTime           = -1;
+long    upTime             = -1;
+boolean ignoreUp           = false;
+boolean waitForUp          = false;
+boolean holdEventPast      = false;
+boolean longHoldEventPast  = false;
 
+// ── Global State ─────────────────────────────────────────────────
+bool lowPowerMode = false;
+bool connected    = false;
+
+Adafruit_DRV2605 drv;
+
+// ─────────────────────────────────────────────────────────────────
+// Setup
+// ─────────────────────────────────────────────────────────────────
 void setup() {
-  //Serial Output:
   Serial.begin(9600);
 
   drv.begin();
   drv.setMode(DRV2605_MODE_REALTIME);
 
-  BLE.begin();
-  
-  // Set button input pin
-  pinMode(buttonPin, INPUT_PULLUP);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(RED_PIN, OUTPUT);
+  pinMode(GREEN_PIN, OUTPUT);
+  pinMode(BLUE_PIN, OUTPUT);
+  allLEDsOff();
 
-  // set advertised local name and service UUID:
+  BLE.begin();
   BLE.setLocalName("BuzzControl");
-  //BLE.advertise();
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Main Loop
+// ─────────────────────────────────────────────────────────────────
 void loop() {
-  //Serial Output:
-  Serial.println("Beginning of Loop Function");
-
+  Serial.println("-- Loop: scanning for peripheral --");
   connectToPeripheral();
 }
 
-void connectionBuzz(bool lowPowerModeActivated = false) {
-  
+// ─────────────────────────────────────────────────────────────────
+// LED Helpers
+// ─────────────────────────────────────────────────────────────────
+void allLEDsOff() {
+  digitalWrite(RED_PIN, HIGH);
+  digitalWrite(GREEN_PIN, HIGH);
+  digitalWrite(BLUE_PIN, HIGH);
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Connection Buzz Feedback
+// ─────────────────────────────────────────────────────────────────
+void connectionBuzz(bool lowPowerActivated = false) {
   int motorCycles;
-  if(lowPowerModeActivated) {
+  if (lowPowerActivated) {
     motorCycles = 3;
-    connectionBuzzOnLength = 100;
+    connectionBuzzOnLength  = 100;
     connectionBuzzOffLength = 100;
-    digitalWrite(bluePin, LOW);
+    digitalWrite(BLUE_PIN, LOW);
   } else {
     motorCycles = 2;
-    if (connected) {
-      digitalWrite(greenPin, LOW);
-    } else {
-      digitalWrite(redPin, LOW);
-    }
+    digitalWrite(connected ? GREEN_PIN : RED_PIN, LOW);
   }
+
   bool motorOn = true;
-  int buzzTime = millis();
+  unsigned long buzzTime = millis();
   drv.setRealtimeValue(127);
 
-  while(motorCycles > 0) {
-    if(motorOn && millis() > buzzTime + connectionBuzzOnLength) {
+  while (motorCycles > 0) {
+    if (motorOn && millis() > buzzTime + connectionBuzzOnLength) {
       drv.setRealtimeValue(0);
       buzzTime = millis();
       motorOn = false;
       motorCycles--;
-    } else if(!motorOn && millis() > buzzTime + connectionBuzzOffLength) {
+    } else if (!motorOn && millis() > buzzTime + connectionBuzzOffLength) {
       drv.setRealtimeValue(127);
       buzzTime = millis();
       motorOn = true;
     }
-
   }
+
   drv.setRealtimeValue(0);
-  digitalWrite(bluePin, HIGH);
-  digitalWrite(greenPin, HIGH);
-  digitalWrite(redPin, HIGH);
+  allLEDsOff();
 }
 
-void connectToPeripheral(){
-  //Serial Output:
-  Serial.println("Entered connectToPeripheral");
-
+// ─────────────────────────────────────────────────────────────────
+// Scanning & Connection
+// ─────────────────────────────────────────────────────────────────
+void connectToPeripheral() {
   BLEDevice peripheral;
 
-  if(!lowPowerMode) {
-    //Serial Output:
-    Serial.println("lowPowerMode = false");
-
-    do
-    {
-      ScanStatus = BLE.scanForUuid(deviceService);
-      Serial.println(deviceService);
-      Serial.println(ScanStatus);
+  if (!lowPowerMode) {
+    do {
+      BLE.scanForUuid(SERVICE_UUID);
       peripheral = BLE.available();
-      if(checkButton() == 3) {
+      if (checkButton() == BTN_LONG_HOLD) {
         connectionBuzz(true);
         holdEventPast = true;
         longHoldEventPast = true;
         lowPower();
+        return;
       }
     } while (!peripheral);
-    
-    //Serial Output:
-    Serial.println("Found Peripheral");
 
+    Serial.println("Found peripheral");
   } else {
     lowPower();
+    return;
   }
-  
-  if (peripheral) {
-    //Serial Output:
-    Serial.println("Entering controlPeripheral");
 
-    //peripheral.address();
-    //peripheral.localName();
-    //peripheral.advertisedServiceUuid();
+  if (peripheral) {
     BLE.stopScan();
     controlPeripheral(peripheral);
   }
 }
 
-void lowPower() { 
-  //Serial Output:
-    Serial.println("lowPowerMode = true, ending bluetooth, waiting for button hold");
+// ─────────────────────────────────────────────────────────────────
+// Low Power Mode
+// ─────────────────────────────────────────────────────────────────
+void lowPower() {
+  Serial.println("Entering low power mode");
+  BLE.stopScan();
 
-    //BLE.end();
-    BLE.stopScan();
-    while (checkButton() != 3) {};
+  while (checkButton() != BTN_LONG_HOLD) {}
 
-    //Serial Output:
-    Serial.println("Button hold detected, beginning bluetooth");
-
-    connectionBuzz(true);
-    lowPowerMode = false;
-    //BLE.begin();
-    ignoreUp = true;
-    holdEventPast = true;
-    longHoldEventPast = true;
+  Serial.println("Waking from low power");
+  connectionBuzz(true);
+  lowPowerMode = false;
+  ignoreUp = true;
+  holdEventPast = true;
+  longHoldEventPast = true;
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Main Peripheral Control (runs while connected)
+// ─────────────────────────────────────────────────────────────────
 void controlPeripheral(BLEDevice peripheral) {
-
   if (!peripheral.connect()) {
-    //Serial Output:
-    Serial.println("Peripheral Disconnected @ beginning of controlPeripheral");
+    Serial.println("Connection failed");
     return;
   }
 
@@ -187,198 +208,81 @@ void controlPeripheral(BLEDevice peripheral) {
   connectionBuzz();
 
   if (!peripheral.discoverAttributes()) {
-    //Serial Output:
-    Serial.println("Attributes not discovered, disconnecting");
-
+    Serial.println("Attribute discovery failed");
     peripheral.disconnect();
     return;
   }
 
-  BLECharacteristic cTouched = peripheral.characteristic(controlTouchedCharacteristic);
-  BLECharacteristic pTouched = peripheral.characteristic(peripheralTouchedCharacteristic);
+  BLECharacteristic cTouched = peripheral.characteristic(C_TOUCHED_UUID);
+  BLECharacteristic pTouched = peripheral.characteristic(P_TOUCHED_UUID);
+
+  if (!cTouched || !cTouched.canWrite()) {
+    Serial.println("cTouched characteristic invalid");
+    peripheral.disconnect();
+    return;
+  }
+  if (!pTouched || !pTouched.canWrite()) {
+    Serial.println("pTouched characteristic invalid");
+    peripheral.disconnect();
+    return;
+  }
 
   cTouched.subscribe();
   pTouched.subscribe();
-    
-  if (!cTouched) {
-    //Serial Output:
-    Serial.println("!cTouched");
 
-    peripheral.disconnect();
-    return;
-  } else if (!cTouched.canWrite()) {
-    //Serial Output:    
-    Serial.println("!cTouched.canWrite()");
-  peripheral.disconnect();
-    return;
-  }
+  Serial.println("Connected — entering session loop");
 
-  if (!pTouched) {
-    Serial.println("!pTouched");
-    peripheral.disconnect();
-    return;
-  } else if (!pTouched.canWrite()) {
-    Serial.println("!cTouched.canWrite()");
-    peripheral.disconnect();
-    return;
-  }
-
-  //connectionBuzz();
-
-  //Serial Output:
-  Serial.println("Entering while(peripheral.connected()) in controlPeripheral");
- 
   while (peripheral.connected()) {
-
-    int start = 0;
-    int loopControl = 2;
-    byte cByte = 0;
-    byte pByte = 0;
+    int loopControl = STATE_MAIN_LOOP;
+    byte cByte = SIG_NONE;
+    byte pByte = SIG_NONE;
 
     waitForStart(peripheral, cTouched, pTouched, loopControl, cByte, pByte);
 
-    if (loopControl == 1) {
+    if (loopControl == STATE_INITIATOR) {
       initiator(peripheral, cTouched, pTouched, loopControl, cByte, pByte);
-    }
-      
-    else if (loopControl == 0) {
+    } else if (loopControl == STATE_INITIATEE) {
       initiatee(peripheral, cTouched, pTouched, cByte, pByte, loopControl);
     }
 
-    if (loopControl == 2) {
-      mainLoop(peripheral, cTouched, pTouched, start, cByte, pByte);
+    if (loopControl == STATE_MAIN_LOOP && peripheral.connected()) {
+      mainLoop(peripheral, cTouched, pTouched, cByte, pByte);
     }
 
-    digitalWrite(redPin, HIGH);
-    digitalWrite(greenPin, HIGH);
-    digitalWrite(bluePin, HIGH);
+    allLEDsOff();
   }
-  connected = false;
 
+  connected = false;
   connectionBuzz(lowPowerMode);
 }
 
-void mainLoop(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacteristic pTouched, int &start, byte &cByte, byte &pByte) {
-  //Serial Output:
-  Serial.println("Entering mainLoop");
-  
-  digitalWrite(bluePin, LOW);
-  digitalWrite(redPin, HIGH);
-  unsigned long time = millis();
-
-  while (peripheral.connected() && (start != 1)) {
-    
-    drv.setRealtimeValue(map(time+consentDuration-millis(), 0, consentDuration, 30, 127));
-
-    if (pTouched.valueUpdated()) {
-      pTouched.readValue(pByte);
-
-      //Serial Output:
-      Serial.println("pTouched value updated: ");
-      Serial.println(pByte);
-      Serial.println("cByte before update: ");
-      Serial.println(cByte);
-
-      //Serial Output:
-      Serial.println("cLast == cByte");
-
-      if ((cByte == 1) && (pByte == 1)) {
-        //Serial Output:
-        Serial.println("cByte == 1 && pByte == 1, writing cTouched to 3");
-
-        cTouched.writeValue((byte) 3);
-        cByte = 3;
-        timer(cTouched, pTouched, cByte, pByte, time);
-      }
-
-      if (pByte == 2) {
-        holdEventPast = true;
-        longHoldEventPast = true;
-        break;
-      }
-
-      if (pByte == 3) {
-        timer (cTouched, pTouched, cByte, pByte, time);
-      }
-    }
-
-    switch(checkButton()) {
-      case 2:
-        //Serial Output:
-        Serial.println("case 2: writing cTouched to 2");
-        holdEventPast = true;
-        longHoldEventPast = true;
-        cTouched.writeValue((byte) 2);
-        cByte = 0;
-        start = 1;
-      case 0:
-        break;
-      default: 
-        //Serial Output:
-        Serial.println("default case, writing cTouched to 1");
-
-        cTouched.writeValue((byte) 1);
-        cByte = 1;
-        break;
-    }
-
-    if (millis() > time + consentDuration) {
-      holdEventPast = true;
-      longHoldEventPast = true;
-      break;
-    }
-  }
-
-  //Serial Output:
-  Serial.println("Exiting mainLoop, start: ");
-  Serial.println(start);
-  
-  drv.setRealtimeValue(0);
-}
-
-void timer(BLECharacteristic cTouched, BLECharacteristic pTouched, byte &cByte, byte &pByte, unsigned long &time) {
-  //Serial Output:
-  Serial.println("Entered Timer");
-
-  time = millis();
-  //pTouched.writeValue((byte) 0);
-  pByte = 0;
-  cByte = 0;
-}
-
-void waitForStart(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacteristic pTouched, int &loopControl, byte &cByte, byte &pByte) {
-  //Serial Output:
-  Serial.println("Entered waitForStart");
-
-  int i;
+// ─────────────────────────────────────────────────────────────────
+// Wait For Start — idle until someone initiates
+// ─────────────────────────────────────────────────────────────────
+void waitForStart(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacteristic pTouched,
+                  int &loopControl, byte &cByte, byte &pByte) {
+  Serial.println("waitForStart");
   ignoreUp = true;
   holdEventPast = true;
   longHoldEventPast = true;
-  while (peripheral.connected()) {
 
+  while (peripheral.connected()) {
+    // Check if peripheral initiated
     if (pTouched.valueUpdated()) {
       pTouched.readValue(pByte);
+      Serial.print("pTouched updated: "); Serial.println(pByte);
 
-      //Serial Output:
-      Serial.println("Value Updated, pByte: ");
-      Serial.println(pByte);
-
-      if (pByte == 2) {
-        //Serial Output:
-        Serial.println("Writing pTouched to 0 & breaking because pByte == 2");
-
-        //pTouched.writeValue((byte) 0);
-        pByte = 0;
-        loopControl = 0;
+      if (pByte == SIG_INITIATE) {
+        pByte = SIG_NONE;
+        loopControl = STATE_INITIATEE;
         break;
       }
     }
 
-    i = checkButton();
+    int btn = checkButton();
 
-    if (i == 3) {
-      //Serial Output:
-      Serial.println("Disconnecting because long hold detected");
+    if (btn == BTN_LONG_HOLD) {
+      Serial.println("Long hold — disconnecting for low power");
       holdEventPast = true;
       longHoldEventPast = true;
       peripheral.disconnect();
@@ -386,212 +290,293 @@ void waitForStart(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacter
       return;
     }
 
-    if (i != 0 && i != 4) {
-      //Serial Output:
-      Serial.println("i!=0, writing cTouched to 2");
-
-      cTouched.writeValue((byte) 2);
-      cByte = 0;
-      loopControl = 1;
+    if (btn != BTN_NONE && btn != BTN_HOLD) {
+      Serial.println("Button press — initiating");
+      cTouched.writeValue(SIG_INITIATE);
+      cByte = SIG_NONE;
+      loopControl = STATE_INITIATOR;
       break;
     }
   }
 
-  //Serial Output:
   Serial.println("Exiting waitForStart");
-  if(!peripheral.connected()) Serial.println("Due to disconnect");
-
 }
 
-void initiator(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacteristic pTouched, int &loopControl, byte &cByte, byte &pByte) {
-  //Serial Output:
-  Serial.println("Entering Initiator");
+// ─────────────────────────────────────────────────────────────────
+// Initiator — we started it, buzz and wait for acceptance
+// ─────────────────────────────────────────────────────────────────
+void initiator(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacteristic pTouched,
+               int &loopControl, byte &cByte, byte &pByte) {
+  Serial.println("Entering initiator");
   holdEventPast = true;
   longHoldEventPast = true;
   ignoreUp = true;
 
-  unsigned long time = millis();
+  unsigned long cycleStart = millis();
   int count = 0;
 
-  while ((peripheral.connected()) && (count != initiateIterations)) {
-    
-    if (checkButton() == 2) {
-      //Serial Output:
-      Serial.println("checkButton() == 4, setting cTouched to 4");
-
-      cTouched.writeValue((byte) 4);
-      cByte = 4;
-      loopControl = 0;
+  while (peripheral.connected() && count < INITIATE_MAX_CYCLES) {
+    // Double-click to cancel our own initiation
+    if (checkButton() == BTN_DOUBLE) {
+      Serial.println("Initiator double-click — cancelling");
+      cTouched.writeValue(SIG_CANCEL);
+      cByte = SIG_CANCEL;
+      // loopControl stays STATE_INITIATOR → won't enter mainLoop, back to waitForStart
       break;
     }
 
-    if(millis() < (time + initiateBuzzLength)) {
-      drv.setRealtimeValue(initiateStrength);
-      digitalWrite(redPin, LOW);
+    // Periodic buzz pattern
+    if (millis() < cycleStart + INITIATE_BUZZ_LENGTH) {
+      drv.setRealtimeValue(INITIATE_STRENGTH);
+      digitalWrite(RED_PIN, LOW);
     } else {
-      digitalWrite(redPin, HIGH);
       drv.setRealtimeValue(0);
+      digitalWrite(RED_PIN, HIGH);
     }
 
-    if(millis() >= (time + initiateLength)) {
-      time = millis();
+    if (millis() >= cycleStart + INITIATE_CYCLE_LEN) {
+      cycleStart = millis();
       count++;
     }
 
+    // Check for response from peripheral
     if (pTouched.valueUpdated()) {
       pTouched.readValue(pByte);
+      Serial.print("pTouched updated in initiator: "); Serial.println(pByte);
 
-      //Serial Output:
-      Serial.println("pTouched value updated");
-      Serial.println(pByte);
-
-      if (pByte == 4) {
-        pByte = 0;
-        loopControl = 0;
+      if (pByte == SIG_INITIATE) {
+        // Peripheral accepted — proceed to mainLoop
+        pByte = SIG_NONE;
+        loopControl = STATE_MAIN_LOOP;
         break;
-      } else if (pByte == 2) {
-        //Serial Output:
-        Serial.println("pByte == 2, setting pTouched to 0");
-
-        //pTouched.writeValue((byte) 0);
-        pByte = 0;
-        loopControl = 2;
+      } else if (pByte == SIG_CANCEL) {
+        // Peripheral cancelled — back to waitForStart
+        pByte = SIG_NONE;
+        // loopControl stays STATE_INITIATOR
         break;
       }
     }
-  } 
-  //Serial Output:
-  Serial.println("Exiting Initiator");
+  }
 
+  Serial.println("Exiting initiator");
   drv.setRealtimeValue(0);
+  digitalWrite(RED_PIN, HIGH);
 }
 
-void initiatee(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacteristic pTouched, byte cByte, byte pByte, int &loopControl) {
-  //Serial Output:
+// ─────────────────────────────────────────────────────────────────
+// Initiatee — other side started it, buzz and wait for our response
+// ─────────────────────────────────────────────────────────────────
+void initiatee(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacteristic pTouched,
+               byte &cByte, byte &pByte, int &loopControl) {
   Serial.println("Entering initiatee");
   holdEventPast = true;
   longHoldEventPast = true;
   ignoreUp = true;
 
-  int i;
-  unsigned long time = millis();
+  unsigned long cycleStart = millis();
   int count = 0;
 
-  while ((peripheral.connected()) && (loopControl == 0) && (count != initiateIterations)) {
-
+  while (peripheral.connected() && loopControl == STATE_INITIATEE && count < INITIATE_MAX_CYCLES) {
+    // Check for cancel from initiator
     if (pTouched.valueUpdated()) {
       pTouched.readValue(pByte);
-      //Serial Output:
-      Serial.println("pTouched value updated");
-      Serial.println(pByte);
+      Serial.print("pTouched updated in initiatee: "); Serial.println(pByte);
 
-      if (pByte == 4) {
-        pByte = 0;
-        loopControl = 1;
+      if (pByte == SIG_CANCEL) {
+        // Initiator cancelled — back to waitForStart
+        pByte = SIG_NONE;
+        // loopControl stays STATE_INITIATEE → won't enter mainLoop
         break;
       }
     }
 
-    if(millis() < (time + initiateBuzzLength)) {
-      drv.setRealtimeValue(initiateStrength);
-      digitalWrite(redPin, LOW);
+    // Periodic buzz pattern
+    if (millis() < cycleStart + INITIATE_BUZZ_LENGTH) {
+      drv.setRealtimeValue(INITIATE_STRENGTH);
+      digitalWrite(RED_PIN, LOW);
     } else {
-      digitalWrite(redPin, HIGH);
       drv.setRealtimeValue(0);
+      digitalWrite(RED_PIN, HIGH);
     }
 
-    if(millis() >= (time + initiateLength)) {
-      time = millis();
+    if (millis() >= cycleStart + INITIATE_CYCLE_LEN) {
+      cycleStart = millis();
       count++;
     }
 
-    switch(checkButton()) {
-      case 2:
-        //Serial Output:
-        Serial.println("case 4: writing cTouched to 4");
-
-        cTouched.writeValue((byte) 4);
-        cByte = 4;
-        loopControl = 1;
+    // Check button
+    switch (checkButton()) {
+      case BTN_DOUBLE:
+        // Double-click cancels — send cancel signal, back to waitForStart
+        Serial.println("Double-click — cancelling initiation");
+        cTouched.writeValue(SIG_CANCEL);
+        cByte = SIG_CANCEL;
+        loopControl = STATE_INITIATOR;  // won't match mainLoop check
+        break;
+      case BTN_NONE:
         break;
       default:
-        //Serial Output:
-        Serial.println("case default: writing cTouched to 2");
-
-        cTouched.writeValue((byte) 2);
-        cByte = 0;
-        loopControl = 2;
-        break;
-      case 0:
+        // Any other press accepts — send initiate signal, go to mainLoop
+        Serial.println("Accepting initiation");
+        cTouched.writeValue(SIG_INITIATE);
+        cByte = SIG_NONE;
+        loopControl = STATE_MAIN_LOOP;
         break;
     }
   }
 
-  //Serial Output:
-  Serial.println("Exiting Initiatee");
+  Serial.println("Exiting initiatee");
+  drv.setRealtimeValue(0);
+  digitalWrite(RED_PIN, HIGH);
+}
 
+// ─────────────────────────────────────────────────────────────────
+// Main Loop — consent timer with mutual re-up
+// ─────────────────────────────────────────────────────────────────
+void mainLoop(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacteristic pTouched,
+              byte &cByte, byte &pByte) {
+  Serial.println("Entering mainLoop");
+
+  digitalWrite(BLUE_PIN, LOW);
+  digitalWrite(RED_PIN, HIGH);
+  unsigned long consentTimer = millis();
+  bool sessionActive = true;
+
+  while (peripheral.connected() && sessionActive) {
+    // Buzz intensity decays over consent duration
+    long remaining = (long)(consentTimer + CONSENT_DURATION - millis());
+    int buzzValue = map(constrain(remaining, 0, CONSENT_DURATION), 0, CONSENT_DURATION, 30, 127);
+    drv.setRealtimeValue(buzzValue);
+
+    // Check for updates from peripheral
+    if (pTouched.valueUpdated()) {
+      pTouched.readValue(pByte);
+      Serial.print("pTouched in mainLoop: "); Serial.println(pByte);
+
+      if (pByte == SIG_PRESSING && cByte == SIG_PRESSING) {
+        // Both pressing — confirm re-up
+        Serial.println("Mutual press — sending re-up");
+        cTouched.writeValue(SIG_REUP);
+        cByte = SIG_REUP;
+        resetConsentTimer(cByte, pByte, consentTimer);
+      }
+
+      if (pByte == SIG_INITIATE) {
+        // Peripheral ended the session
+        holdEventPast = true;
+        longHoldEventPast = true;
+        sessionActive = false;
+      }
+
+      if (pByte == SIG_REUP) {
+        // Peripheral confirmed re-up
+        resetConsentTimer(cByte, pByte, consentTimer);
+      }
+    }
+
+    // Check local button
+    int btn = checkButton();
+    switch (btn) {
+      case BTN_DOUBLE:
+        Serial.println("Double-click — ending session");
+        holdEventPast = true;
+        longHoldEventPast = true;
+        cTouched.writeValue(SIG_INITIATE);
+        cByte = SIG_NONE;
+        sessionActive = false;
+        break;
+      case BTN_NONE:
+        break;
+      default:
+        Serial.println("Button press — signaling");
+        cTouched.writeValue(SIG_PRESSING);
+        cByte = SIG_PRESSING;
+        break;
+    }
+
+    // Check consent timer expiry
+    if (millis() > consentTimer + CONSENT_DURATION) {
+      Serial.println("Consent timer expired");
+      holdEventPast = true;
+      longHoldEventPast = true;
+      sessionActive = false;
+    }
+  }
+
+  Serial.println("Exiting mainLoop");
   drv.setRealtimeValue(0);
 }
 
-int checkButton() {    
-   int event = 0;
-   buttonVal = digitalRead(buttonPin);
-   // Button pressed down
-   if (buttonVal == LOW && buttonLast == HIGH && (millis() - upTime) > debounce)
-   {
-       downTime = millis();
-       ignoreUp = false;
-       waitForUp = false;
-       singleOK = true;
-       holdEventPast = false;
-       longHoldEventPast = false;
-       if ((millis()-upTime) < DCgap && DConUp == false && DCwaiting == true)  DConUp = true;
-       else  DConUp = false;
-       DCwaiting = false;
-   }
-   // Button released
-   else if (buttonVal == HIGH && buttonLast == LOW && (millis() - downTime) > debounce)
-   {        
-       if (not ignoreUp)
-       {
-           upTime = millis();
-           if (DConUp == false) DCwaiting = true;
-           else
-           {
-               event = 2;
-               DConUp = false;
-               DCwaiting = false;
-               singleOK = false;
-           }
-       }
-   }
-   // Test for normal click event: DCgap expired
-   if ( buttonVal == HIGH && (millis()-upTime) >= DCgap && DCwaiting == true && DConUp == false && singleOK == true && event != 2)
-   {  
-      if(not ignoreUp) {
-        event = 1;
+// ─────────────────────────────────────────────────────────────────
+// Reset Consent Timer
+// ─────────────────────────────────────────────────────────────────
+void resetConsentTimer(byte &cByte, byte &pByte, unsigned long &consentTimer) {
+  Serial.println("Timer reset");
+  consentTimer = millis();
+  cByte = SIG_NONE;
+  pByte = SIG_NONE;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Button Handler
+// Returns: BTN_NONE, BTN_SINGLE, BTN_DOUBLE, BTN_LONG_HOLD, BTN_HOLD
+// Note: holdEventPast and longHoldEventPast are managed manually
+//       throughout the code to control when holds re-fire.
+// ─────────────────────────────────────────────────────────────────
+int checkButton() {
+  int event = BTN_NONE;
+  buttonVal = digitalRead(BUTTON_PIN);
+
+  // Button pressed down
+  if (buttonVal == LOW && buttonLast == HIGH && (millis() - upTime) > DEBOUNCE_MS) {
+    downTime = millis();
+    ignoreUp = false;
+    waitForUp = false;
+    singleOK = true;
+    holdEventPast = false;
+    longHoldEventPast = false;
+    if ((millis() - upTime) < DC_GAP_MS && !DConUp && DCwaiting) {
+      DConUp = true;
+    } else {
+      DConUp = false;
+    }
+    DCwaiting = false;
+  }
+  // Button released
+  else if (buttonVal == HIGH && buttonLast == LOW && (millis() - downTime) > DEBOUNCE_MS) {
+    if (!ignoreUp) {
+      upTime = millis();
+      if (!DConUp) {
+        DCwaiting = true;
+      } else {
+        event = BTN_DOUBLE;
+        DConUp = false;
         DCwaiting = false;
+        singleOK = false;
       }
-   }
-   // Test for hold
-   if (buttonVal == LOW && (millis() - downTime) >= holdTime) {
-      // Trigger "normal" hold
-      if (not holdEventPast)
-      {
-        event = 4;
-        waitForUp = true;
-        //holdEventPast = true;
-      }
-       // Trigger "long" hold
-       if ((millis() - downTime) >= longHoldTime)
-       {
-           if (not longHoldEventPast)
-           {
-               event = 3;
-               //longHoldEventPast = true;
-           }
-       }
-   }
-   buttonLast = buttonVal;
-   return event;
+    }
+  }
+
+  // Single click (DC gap expired without second press)
+  if (buttonVal == HIGH && (millis() - upTime) >= DC_GAP_MS
+      && DCwaiting && !DConUp && singleOK && event != BTN_DOUBLE) {
+    if (!ignoreUp) {
+      event = BTN_SINGLE;
+      DCwaiting = false;
+    }
+  }
+
+  // Hold detection
+  if (buttonVal == LOW && (millis() - downTime) >= HOLD_TIME_MS) {
+    if (!holdEventPast) {
+      event = BTN_HOLD;
+      waitForUp = true;
+    }
+    if ((millis() - downTime) >= LONG_HOLD_MS && !longHoldEventPast) {
+      event = BTN_LONG_HOLD;
+    }
+  }
+
+  buttonLast = buttonVal;
+  return event;
 }
