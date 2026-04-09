@@ -266,6 +266,17 @@ void waitForStart(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacter
   holdEventPast = true;
   longHoldEventPast = true;
 
+  // Settling period: flush stale signals from previous state transitions.
+  // This prevents e.g. a leftover "end session" (SIG_INITIATE) from being
+  // misread as a new initiation request.
+  unsigned long settleEnd = millis() + 200;
+  while (millis() < settleEnd && peripheral.connected()) {
+    if (pTouched.valueUpdated()) {
+      pTouched.readValue(pByte);  // read and discard
+    }
+    checkButton();  // keep button state machine running
+  }
+
   while (peripheral.connected()) {
     // Check if peripheral initiated
     if (pTouched.valueUpdated()) {

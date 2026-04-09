@@ -330,6 +330,15 @@ void waitForStart(BLEDevice central, int &loopControl, byte &pByte, byte &cByte)
   holdEventPast = true;
   longHoldEventPast = true;
 
+  // Settling period: flush stale signals from previous state transitions.
+  unsigned long settleEnd = millis() + 200;
+  while (millis() < settleEnd && central.connected()) {
+    if (cTouched.written()) {
+      cTouched.readValue(cByte);  // read and discard
+    }
+    checkButton();  // keep button state machine running
+  }
+
   while (central.connected()) {
     // Check if control initiated
     if (cTouched.written()) {
