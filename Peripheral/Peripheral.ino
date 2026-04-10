@@ -30,6 +30,7 @@ const byte SIG_CANCEL   = 4;  // Initiator/Initiatee: "Cancel the initiation"
 const int STATE_INITIATEE = 0;
 const int STATE_INITIATOR = 1;
 const int STATE_MAIN_LOOP = 2;
+const int STATE_IDLE      = 3;  // Default — nothing happened yet
 
 // ── Button Event Values ──────────────────────────────────────────
 const int BTN_NONE        = 0;
@@ -250,6 +251,9 @@ void connectionBuzz(bool lowPowerActivated = false) {
 void loop() {
   Serial.println("-- Loop: waiting for connection --");
 
+  // Check for serial commands from dashboard (even when disconnected)
+  handleSerialCommands();
+
   // Check for long hold to enter low power
   if (checkButton() == BTN_LONG_HOLD) {
     lowPowerMode = true;
@@ -277,11 +281,16 @@ void loop() {
 
   if (central) {
     Serial.println("Connected to central");
+    Serial.print("Current millis: ");
+    Serial.println(millis());
     connected = true;
     connectionBuzz();
 
-    while (central.connected()) {
-      int loopControl = STATE_MAIN_LOOP;
+    while (central.connected() && !lowPowerMode) {
+      // Check for serial commands from dashboard
+      handleSerialCommands();
+
+      int loopControl = STATE_IDLE;
       byte cByte = SIG_NONE;
       byte pByte = SIG_NONE;
 
@@ -294,6 +303,8 @@ void loop() {
           allData.numPInits++;
         }
         lastInitiator = 1;  // peripheral initiated
+        saveData();
+        printJSONData();
       } else if (loopControl == STATE_INITIATEE) {
         initiatee(central, pByte, cByte, loopControl);
         if (allData.numCInits < MAX_INIT_LOG) {
@@ -301,6 +312,8 @@ void loop() {
           allData.numCInits++;
         }
         lastInitiator = 0;  // control initiated
+        saveData();
+        printJSONData();
       }
 
       if (loopControl == STATE_MAIN_LOOP && central.connected()) {
@@ -309,6 +322,7 @@ void loop() {
           int idx = allData.numSessions - 1;  // mainLoop already incremented
           allData.sessions[idx].initiator = lastInitiator;
           saveData();
+          printJSONData();
         }
       }
 
@@ -392,7 +406,6 @@ void initiator(BLEDevice central, int &loopControl, byte &pByte, byte &cByte) {
     if (checkButton() == BTN_DOUBLE) {
       Serial.println("Initiator double-click — cancelling");
       pTouched.writeValue(SIG_CANCEL);
-      // loopControl stays STATE_INITIATOR → won't enter mainLoop, back to waitForStart
       break;
     }
 
@@ -627,6 +640,61 @@ void mainLoop(BLEDevice central, byte &cByte, byte &pByte) {
   if (session >= 0) {
     allData.sessions[session].endTime = millis();
   }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Serial Command Handler (for dashboard communication)
+// ─────────────────────────────────────────────────────────────────
+void handleSerialCommands() {
+  while (Serial.available()) {
+    char cmd = Serial.read();
+    if (cmd == 'd') {
+      // Wipe all stored data
+      Serial.println("Deleting all data");
+      memset(&allData, 0, sizeof(allData));
+      deleteData();
+      myFlashPrefs.writePrefs(&allData, sizeof(allData));
+      printJSONData();  // Send updated (empty) data back
+    } else if (cmd == 'p') {
+      // Print current data
+      printJSONData();
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// JSON Data Output (for dashboard)
+// ─────────────────────────────────────────────────────────────────
+void printJSONData() {
+  Serial.print("Current millis: ");
+  Serial.println(millis());
+  Serial.println("Printing JSON Data");
+
+  Serial.print("{\"numPInits\":");
+  Serial.print(allData.numPInits);
+  Serial.print(",\"numCInits\":");
+  Serial.print(allData.numCInits);
+  Serial.print(",\"sessions\":[");
+
+  for (int i = 0; i < allData.numSessions; i++) {
+    if (i > 0) Serial.print(",");
+    SessionData &s = allData.sessions[i];
+    Serial.print("{\"id\":");
+    Serial.print(i);
+    Serial.print(",\"initiator\":\"");
+    Serial.print(s.initiator ? "Peripheral" : "Control");
+    Serial.print("\",\"endMethod\":\"");
+    Serial.print(s.endedByButton ? "Button" : "Decay");
+    Serial.print("\",\"begin\":");
+    Serial.print(s.beginTime);
+    Serial.print(",\"duration\":");
+    Serial.print(s.endTime - s.beginTime);
+    Serial.print(",\"numReUps\":");
+    Serial.print(s.reUpCount);
+    Serial.print("}");
+  }
+
+  Serial.println("]}");
 }
 
 // ─────────────────────────────────────────────────────────────────

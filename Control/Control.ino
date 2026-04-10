@@ -29,6 +29,7 @@ const byte SIG_CANCEL   = 4;  // Initiator/Initiatee: "Cancel the initiation"
 const int STATE_INITIATEE = 0;
 const int STATE_INITIATOR = 1;
 const int STATE_MAIN_LOOP = 2;
+const int STATE_IDLE      = 3;  // Default — nothing happened yet
 
 // ── Button Event Values ──────────────────────────────────────────
 const int BTN_NONE        = 0;
@@ -232,8 +233,8 @@ void controlPeripheral(BLEDevice peripheral) {
 
   Serial.println("Connected — entering session loop");
 
-  while (peripheral.connected()) {
-    int loopControl = STATE_MAIN_LOOP;
+  while (peripheral.connected() && !lowPowerMode) {
+    int loopControl = STATE_IDLE;
     byte cByte = SIG_NONE;
     byte pByte = SIG_NONE;
 
@@ -253,6 +254,7 @@ void controlPeripheral(BLEDevice peripheral) {
   }
 
   connected = false;
+  Serial.println("Disconnected from peripheral");
   connectionBuzz(lowPowerMode);
 }
 
@@ -332,7 +334,6 @@ void initiator(BLEDevice peripheral, BLECharacteristic cTouched, BLECharacterist
       Serial.println("Initiator double-click — cancelling");
       cTouched.writeValue(SIG_CANCEL);
       cByte = SIG_CANCEL;
-      // loopControl stays STATE_INITIATOR → won't enter mainLoop, back to waitForStart
       break;
     }
 
