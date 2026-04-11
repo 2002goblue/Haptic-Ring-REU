@@ -14,7 +14,7 @@ const int GREEN_PIN = LEDG;
 const int BLUE_PIN  = LEDB;
 
 // ── BLE UUIDs ────────────────────────────────────────────────────
-const char* SERVICE_UUID   = "19B10000-E8F2-537E-4F6C-D104768A1214";
+const char* SERVICE_UUID   = "19B10000-E8F2-537E-4F6C-D104768A1212";
 const char* C_TOUCHED_UUID = "19B10001-E8F2-537E-4F6C-D104768A1214";
 const char* P_TOUCHED_UUID = "19B10002-E8F2-537E-4F6C-D104768A1214";
 
@@ -69,6 +69,12 @@ boolean ignoreUp           = false;
 boolean waitForUp          = false;
 boolean holdEventPast      = false;
 boolean longHoldEventPast  = false;
+
+// ── Reboot Detection ─────────────────────────────────────────────
+int rebootClickCount           = 0;
+unsigned long rebootWindowStart = 0;
+const int REBOOT_CLICKS        = 8;
+const unsigned long REBOOT_WINDOW = 4000;  // 4 seconds
 
 // ── Global State ─────────────────────────────────────────────────
 bool lowPowerMode = false;
@@ -586,6 +592,18 @@ int checkButton() {
     }
     if ((millis() - downTime) >= LONG_HOLD_MS && !longHoldEventPast) {
       event = BTN_LONG_HOLD;
+    }
+  }
+
+  // Reboot check: 8 clicks within 4 seconds triggers reset
+  if (event == BTN_SINGLE || event == BTN_DOUBLE) {
+    if (rebootClickCount == 0 || (millis() - rebootWindowStart) > REBOOT_WINDOW) {
+      rebootClickCount = 0;
+      rebootWindowStart = millis();
+    }
+    rebootClickCount += (event == BTN_DOUBLE) ? 2 : 1;
+    if (rebootClickCount >= REBOOT_CLICKS) {
+      NVIC_SystemReset();
     }
   }
 
