@@ -1,6 +1,6 @@
-// BuzzPeripheral - Advertiser/Server Device
-// Advertises and accepts connections from BuzzControl.
-// Reads from cTouched (written by Control), writes to pTouched.
+// BuzzPeripheral - Unified (BLE + Serial)
+// 8 rapid clicks toggles mode and reboots.
+// Mode is persisted to flash (separate from session data).
 
 #include <ArduinoBLE.h>
 #include <Wire.h>
@@ -14,23 +14,23 @@ const int RED_PIN   = LEDR;
 const int GREEN_PIN = LEDG;
 const int BLUE_PIN  = LEDB;
 
-// ── BLE UUIDs & Service ──────────────────────────────────────────
+// ── BLE Service & Characteristics ────────────────────────────────
 BLEService deviceService("19B10000-E8F2-537E-4F6C-D104768A1212");
-BLEByteCharacteristic cTouched("19B10001-E8F2-537E-4F6C-D104768A1214", BLERead | BLEWrite | BLENotify);
-BLEByteCharacteristic pTouched("19B10002-E8F2-537E-4F6C-D104768A1214", BLERead | BLEWrite | BLENotify);
+BLEByteCharacteristic bleCTouched("19B10001-E8F2-537E-4F6C-D104768A1214", BLERead | BLEWrite | BLENotify);
+BLEByteCharacteristic blePTouched("19B10002-E8F2-537E-4F6C-D104768A1214", BLERead | BLEWrite | BLENotify);
 
-// ── BLE Signal Values ────────────────────────────────────────────
+// ── Signal Values ────────────────────────────────────────────────
 const byte SIG_NONE     = 0;
 const byte SIG_PRESSING = 1;
-const byte SIG_INITIATE = 2;  // WaitForStart: "I want to initiate" / Initiatee: "I accept" / MainLoop: "End session"
+const byte SIG_INITIATE = 2;
 const byte SIG_REUP     = 3;
-const byte SIG_CANCEL   = 4;  // Initiator/Initiatee: "Cancel the initiation"
+const byte SIG_CANCEL   = 4;
 
 // ── Loop State Values ────────────────────────────────────────────
 const int STATE_INITIATEE = 0;
 const int STATE_INITIATOR = 1;
 const int STATE_MAIN_LOOP = 2;
-const int STATE_IDLE      = 3;  // Default — nothing happened yet
+const int STATE_IDLE      = 3;
 
 // ── Button Event Values ──────────────────────────────────────────
 const int BTN_NONE        = 0;
@@ -75,12 +75,26 @@ boolean longHoldEventPast  = false;
 int rebootClickCount           = 0;
 unsigned long rebootWindowStart = 0;
 const int REBOOT_CLICKS        = 8;
-const unsigned long REBOOT_WINDOW = 4000;  // 4 seconds
+const unsigned long REBOOT_WINDOW = 2000;
 
 // ── Global State ─────────────────────────────────────────────────
 bool lowPowerMode = false;
 bool connected    = false;
-int  lastInitiator;  // 0 = control initiated, 1 = peripheral initiated
+int  lastInitiator;
+
+// ── Mode Storage ─────────────────────────────────────────────────
+struct ModePrefs {
+  uint8_t mode;  // 0 = BLE, 1 = Serial
+};
+
+NanoBLEFlashPrefs modeFlash;
+ModePrefs modePrefs;
+bool serialMode = false;
+
+// ── Serial Communication (Serial mode only) ──────────────────────
+byte lastCByte = SIG_NONE;
+bool cUpdated  = false;
+String serialInputBuffer = "";
 
 Adafruit_DRV2605 drv;
 
@@ -93,11 +107,11 @@ struct SessionData {
   unsigned long beginTime;
   unsigned long endTime;
   unsigned long reUpTimes[MAX_REUPS];
-  int8_t attemptedP[MAX_REUPS];  // peripheral re-up attempts per segment
-  int8_t attemptedC[MAX_REUPS];  // control re-up attempts per segment
-  bool    initiator;              // true = peripheral initiated
+  int8_t attemptedP[MAX_REUPS];
+  int8_t attemptedC[MAX_REUPS];
+  bool    initiator;
   int8_t  reUpCount;
-  bool    endedByButton;          // true = button ended, false = timer decay
+  bool    endedByButton;
 };
 
 struct AllSessionData {
@@ -109,111 +123,9 @@ struct AllSessionData {
   int8_t        numCInits;
 };
 
-NanoBLEFlashPrefs myFlashPrefs;
+// Separate flash instance for session data
+NanoBLEFlashPrefs dataFlash;
 AllSessionData allData;
-
-// ─────────────────────────────────────────────────────────────────
-// Setup
-// ─────────────────────────────────────────────────────────────────
-void setup() {
-  Serial.begin(9600);
-
-  // UNCOMMENT TO RESET STORAGE:
-  // deleteData();
-  // myFlashPrefs.writePrefs(&allData, sizeof(allData));
-  myFlashPrefs.readPrefs(&allData, sizeof(allData));
-
-  drv.begin();
-  drv.setMode(DRV2605_MODE_REALTIME);
-
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
-  pinMode(RED_PIN, OUTPUT);
-  pinMode(GREEN_PIN, OUTPUT);
-  pinMode(BLUE_PIN, OUTPUT);
-  allLEDsOff();
-
-  BLE.begin();
-  BLE.setLocalName("Buzz On!");
-  BLE.setAdvertisedService(deviceService);
-
-  deviceService.addCharacteristic(cTouched);
-  deviceService.addCharacteristic(pTouched);
-  cTouched.setValue(0);
-  pTouched.setValue(0);
-
-  BLE.addService(deviceService);
-  BLE.advertise();
-}
-
-// ─────────────────────────────────────────────────────────────────
-// LED Helpers
-// ─────────────────────────────────────────────────────────────────
-void allLEDsOff() {
-  digitalWrite(RED_PIN, HIGH);
-  digitalWrite(GREEN_PIN, HIGH);
-  digitalWrite(BLUE_PIN, HIGH);
-}
-
-// ─────────────────────────────────────────────────────────────────
-// Data Storage
-// ─────────────────────────────────────────────────────────────────
-void deleteData() {
-  Serial.println("Deleting stored data");
-  myFlashPrefs.deletePrefs();
-  myFlashPrefs.garbageCollection();
-}
-
-void saveData() {
-  deleteData();
-  myFlashPrefs.writePrefs(&allData, sizeof(allData));
-}
-
-void displaySessions() {
-  Serial.print("Peripheral initiations: "); Serial.println(allData.numPInits);
-  Serial.print("Control initiations: ");    Serial.println(allData.numCInits);
-
-  Serial.println("-- Peripheral initiation times --");
-  for (int i = 0; i < allData.numPInits; i++) {
-    Serial.println(allData.pInitTimes[i]);
-  }
-  Serial.println("-- Control initiation times --");
-  for (int i = 0; i < allData.numCInits; i++) {
-    Serial.println(allData.cInitTimes[i]);
-  }
-
-  Serial.println(myFlashPrefs.statusString());
-  Serial.print("Data size: "); Serial.println(sizeof(allData));
-
-  for (int i = 0; i < allData.numSessions; i++) {
-    displaySession(allData.sessions[i], i);
-  }
-}
-
-void displaySession(SessionData &session, int index) {
-  Serial.print("\n=== Session "); Serial.print(index); Serial.println(" ===");
-  Serial.print("Begin: ");    Serial.println(session.beginTime);
-  Serial.print("End: ");      Serial.println(session.endTime);
-  Serial.print("Duration: "); Serial.println(session.endTime - session.beginTime);
-  Serial.print("Re-ups: ");   Serial.println(session.reUpCount);
-  Serial.print("Initiator: ");
-  Serial.println(session.initiator ? "Peripheral" : "Control");
-  Serial.print("Ended by: ");
-  Serial.println(session.endedByButton ? "Button" : "Decay");
-
-  for (int j = 0; j <= session.reUpCount; j++) {
-    Serial.print("  Segment "); Serial.println(j);
-    Serial.print("    P attempts: "); Serial.println(session.attemptedP[j]);
-    Serial.print("    C attempts: "); Serial.println(session.attemptedC[j]);
-    Serial.print("    Segment duration: ");
-    if (j == 0) {
-      Serial.println(session.reUpTimes[j] - session.beginTime);
-    } else if (j == session.reUpCount) {
-      Serial.println(session.endTime - session.reUpTimes[j - 1]);
-    } else {
-      Serial.println(session.reUpTimes[j] - session.reUpTimes[j - 1]);
-    }
-  }
-}
 
 // ─────────────────────────────────────────────────────────────────
 // Connection Buzz Feedback
@@ -252,425 +164,72 @@ void connectionBuzz(bool lowPowerActivated = false) {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Main Loop
+// Setup
 // ─────────────────────────────────────────────────────────────────
-void loop() {
-  Serial.println("-- Loop: waiting for connection --");
+void setup() {
+  Serial.begin(9600);
 
-  // Check for serial commands from dashboard (even when disconnected)
-  handleSerialCommands();
+  drv.begin();
+  drv.setMode(DRV2605_MODE_REALTIME);
 
-  // Check for long hold to enter low power
-  if (checkButton() == BTN_LONG_HOLD) {
-    lowPowerMode = true;
-    connectionBuzz(true);
-    holdEventPast = true;
-    longHoldEventPast = true;
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(RED_PIN, OUTPUT);
+  pinMode(GREEN_PIN, OUTPUT);
+  pinMode(BLUE_PIN, OUTPUT);
+  allLEDsOff();
+
+  // Read mode from flash
+  if (modeFlash.readPrefs(&modePrefs, sizeof(modePrefs)) == FDS_SUCCESS) {
+    serialMode = (modePrefs.mode == 1);
+  } else {
+    serialMode = false;  // Default to BLE
   }
 
-  if (lowPowerMode) {
-    Serial.println("Low power mode active");
-    BLE.stopAdvertise();
+  // Read session data (stored after mode prefs in flash)
+  dataFlash.readPrefs(&allData, sizeof(allData));
 
-    while (checkButton() != BTN_LONG_HOLD) {}
-
-    Serial.println("Waking from low power");
-    connectionBuzz(true);
-    lowPowerMode = false;
-    BLE.advertise();
-    ignoreUp = true;
-    holdEventPast = true;
-    longHoldEventPast = true;
-  }
-
-  BLEDevice central = BLE.central();
-
-  if (central) {
-    Serial.println("Connected to central");
+  if (serialMode) {
+    Serial.println("BuzzPeripheral Serial Ready");
     Serial.print("Current millis: ");
     Serial.println(millis());
     connected = true;
     connectionBuzz();
-
-    while (central.connected() && !lowPowerMode) {
-      // Check for serial commands from dashboard
-      handleSerialCommands();
-
-      int loopControl = STATE_IDLE;
-      byte cByte = SIG_NONE;
-      byte pByte = SIG_NONE;
-
-      waitForStart(central, loopControl, pByte, cByte);
-
-      if (loopControl == STATE_INITIATOR) {
-        initiator(central, loopControl, pByte, cByte);
-        if (allData.numPInits < MAX_INIT_LOG) {
-          allData.pInitTimes[allData.numPInits] = millis();
-          allData.numPInits++;
-        }
-        lastInitiator = 1;  // peripheral initiated
-        saveData();
-        printJSONData();
-      } else if (loopControl == STATE_INITIATEE) {
-        initiatee(central, pByte, cByte, loopControl);
-        if (allData.numCInits < MAX_INIT_LOG) {
-          allData.cInitTimes[allData.numCInits] = millis();
-          allData.numCInits++;
-        }
-        lastInitiator = 0;  // control initiated
-        saveData();
-        printJSONData();
-      }
-
-      if (loopControl == STATE_MAIN_LOOP && central.connected()) {
-        mainLoop(central, cByte, pByte);
-        if (allData.numSessions <= MAX_SESSIONS) {
-          int idx = allData.numSessions - 1;  // mainLoop already incremented
-          allData.sessions[idx].initiator = lastInitiator;
-          saveData();
-          printJSONData();
-        }
-      }
-
-      allLEDsOff();
-    }
-
-    Serial.println("Disconnected from central");
-    connected = false;
-    connectionBuzz(lowPowerMode);
+  } else {
+    BLE.begin();
+    BLE.setLocalName("Buzz On!");
+    BLE.setAdvertisedService(deviceService);
+    deviceService.addCharacteristic(bleCTouched);
+    deviceService.addCharacteristic(blePTouched);
+    bleCTouched.setValue(0);
+    blePTouched.setValue(0);
+    BLE.addService(deviceService);
+    BLE.advertise();
+    Serial.println("BuzzPeripheral BLE Ready");
   }
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Wait For Start — idle until someone initiates
+// LED Helpers
 // ─────────────────────────────────────────────────────────────────
-void waitForStart(BLEDevice central, int &loopControl, byte &pByte, byte &cByte) {
-  Serial.println("waitForStart");
-  ignoreUp = true;
-  holdEventPast = true;
-  longHoldEventPast = true;
-
-  // Settling period: flush stale signals from previous state transitions.
-  unsigned long settleEnd = millis() + 200;
-  while (millis() < settleEnd && central.connected()) {
-    if (cTouched.written()) {
-      cTouched.readValue(cByte);  // read and discard
-    }
-    checkButton();  // keep button state machine running
-  }
-
-  while (central.connected()) {
-    // Check if control initiated
-    if (cTouched.written()) {
-      cTouched.readValue(cByte);
-      Serial.print("cTouched updated: "); Serial.println(cByte);
-
-      if (cByte == SIG_INITIATE) {
-        cByte = SIG_NONE;
-        loopControl = STATE_INITIATEE;
-        break;
-      }
-    }
-
-    int btn = checkButton();
-
-    if (btn == BTN_LONG_HOLD) {
-      Serial.println("Long hold — disconnecting for low power");
-      holdEventPast = true;
-      longHoldEventPast = true;
-      central.disconnect();
-      lowPowerMode = true;
-      return;
-    }
-
-    if (btn != BTN_NONE && btn != BTN_HOLD) {
-      Serial.println("Button press — initiating");
-      pTouched.writeValue(SIG_INITIATE);
-      pByte = SIG_NONE;
-      loopControl = STATE_INITIATOR;
-      break;
-    }
-  }
-
-  Serial.println("Exiting waitForStart");
-}
-
-// ─────────────────────────────────────────────────────────────────
-// Initiator — we started it, buzz and wait for acceptance
-// ─────────────────────────────────────────────────────────────────
-void initiator(BLEDevice central, int &loopControl, byte &pByte, byte &cByte) {
-  Serial.println("Entering initiator");
-  holdEventPast = true;
-  longHoldEventPast = true;
-  ignoreUp = true;
-
-  unsigned long cycleStart = millis();
-  int count = 0;
-
-  while (central.connected() && count < INITIATE_MAX_CYCLES) {
-    // Double-click to cancel our own initiation
-    if (checkButton() == BTN_DOUBLE) {
-      Serial.println("Initiator double-click — cancelling");
-      pTouched.writeValue(SIG_CANCEL);
-      break;
-    }
-
-    // Periodic buzz pattern
-    if (millis() < cycleStart + INITIATE_BUZZ_LENGTH) {
-      drv.setRealtimeValue(INITIATE_STRENGTH);
-      digitalWrite(RED_PIN, LOW);
-    } else {
-      drv.setRealtimeValue(0);
-      digitalWrite(RED_PIN, HIGH);
-    }
-
-    if (millis() >= cycleStart + INITIATE_CYCLE_LEN) {
-      cycleStart = millis();
-      count++;
-    }
-
-    // Check for response from control
-    if (cTouched.written()) {
-      cTouched.readValue(cByte);
-      Serial.print("cTouched updated in initiator: "); Serial.println(cByte);
-
-      if (cByte == SIG_INITIATE) {
-        // Control accepted — proceed to mainLoop
-        cByte = SIG_NONE;
-        loopControl = STATE_MAIN_LOOP;
-        break;
-      } else if (cByte == SIG_CANCEL) {
-        // Control cancelled — back to waitForStart
-        cByte = SIG_NONE;
-        // loopControl stays STATE_INITIATOR
-        break;
-      }
-    }
-  }
-
-  Serial.println("Exiting initiator");
-  drv.setRealtimeValue(0);
+void allLEDsOff() {
   digitalWrite(RED_PIN, HIGH);
+  digitalWrite(GREEN_PIN, HIGH);
+  digitalWrite(BLUE_PIN, HIGH);
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Initiatee — other side started it, buzz and wait for our response
+// Data Storage
 // ─────────────────────────────────────────────────────────────────
-void initiatee(BLEDevice central, byte &pByte, byte &cByte, int &loopControl) {
-  Serial.println("Entering initiatee");
-  holdEventPast = true;
-  longHoldEventPast = true;
-  ignoreUp = true;
-
-  unsigned long cycleStart = millis();
-  int count = 0;
-
-  while (central.connected() && loopControl == STATE_INITIATEE && count < INITIATE_MAX_CYCLES) {
-    // Check for cancel from initiator
-    if (cTouched.written()) {
-      cTouched.readValue(cByte);
-      Serial.print("cTouched updated in initiatee: "); Serial.println(cByte);
-
-      if (cByte == SIG_CANCEL) {
-        // Initiator cancelled — back to waitForStart
-        cByte = SIG_NONE;
-        // loopControl stays STATE_INITIATEE → won't enter mainLoop
-        break;
-      }
-    }
-
-    // Periodic buzz pattern
-    if (millis() < cycleStart + INITIATE_BUZZ_LENGTH) {
-      drv.setRealtimeValue(INITIATE_STRENGTH);
-      digitalWrite(RED_PIN, LOW);
-    } else {
-      drv.setRealtimeValue(0);
-      digitalWrite(RED_PIN, HIGH);
-    }
-
-    if (millis() >= cycleStart + INITIATE_CYCLE_LEN) {
-      cycleStart = millis();
-      count++;
-    }
-
-    // Check button
-    switch (checkButton()) {
-      case BTN_DOUBLE:
-        // Double-click cancels — send cancel signal, back to waitForStart
-        Serial.println("Double-click — cancelling initiation");
-        pTouched.writeValue(SIG_CANCEL);
-        loopControl = STATE_INITIATOR;  // won't match mainLoop check
-        break;
-      case BTN_NONE:
-        break;
-      default:
-        // Any other press accepts — send initiate signal, go to mainLoop
-        Serial.println("Accepting initiation");
-        pTouched.writeValue(SIG_INITIATE);
-        pByte = SIG_NONE;
-        loopControl = STATE_MAIN_LOOP;
-        break;
-    }
-  }
-
-  Serial.println("Exiting initiatee");
-  drv.setRealtimeValue(0);
-  digitalWrite(RED_PIN, HIGH);
+void deleteSessionData() {
+  dataFlash.deletePrefs();
+  dataFlash.garbageCollection();
 }
 
-// ─────────────────────────────────────────────────────────────────
-// Main Loop — consent timer with mutual re-up
-// ─────────────────────────────────────────────────────────────────
-void mainLoop(BLEDevice central, byte &cByte, byte &pByte) {
-  Serial.println("Entering mainLoop");
-
-  // Start a new session record
-  int session = -1;
-  if (central.connected() && allData.numSessions < MAX_SESSIONS) {
-    session = allData.numSessions++;
-    allData.sessions[session].beginTime = millis();
-    allData.sessions[session].reUpCount = 0;
-    allData.sessions[session].endedByButton = false;
-    // Zero out attempt counters for first segment
-    allData.sessions[session].attemptedP[0] = 0;
-    allData.sessions[session].attemptedC[0] = 0;
-  }
-
-  digitalWrite(BLUE_PIN, LOW);
-  digitalWrite(RED_PIN, HIGH);
-  unsigned long consentTimer = millis();
-  bool sessionActive = true;
-
-  while (central.connected() && sessionActive) {
-    // Buzz intensity decays over consent duration
-    long remaining = (long)(consentTimer + CONSENT_DURATION - millis());
-    int buzzValue = map(constrain(remaining, 0, CONSENT_DURATION), 0, CONSENT_DURATION, 30, 127);
-    drv.setRealtimeValue(buzzValue);
-
-    // Check for updates from control
-    if (cTouched.written()) {
-      cTouched.readValue(cByte);
-      Serial.print("cTouched in mainLoop: "); Serial.println(cByte);
-
-      // Track control's re-up attempts
-      if (cByte == SIG_PRESSING && session >= 0
-          && allData.sessions[session].reUpCount < MAX_REUPS) {
-        allData.sessions[session].attemptedC[allData.sessions[session].reUpCount]++;
-      }
-
-      if (cByte == SIG_PRESSING && pByte == SIG_PRESSING) {
-        // Both pressing — confirm re-up
-        Serial.println("Mutual press — sending re-up");
-        pTouched.writeValue(SIG_REUP);
-        pByte = SIG_REUP;
-        resetConsentTimer(cByte, pByte, consentTimer);
-
-        if (session >= 0 && allData.sessions[session].reUpCount < MAX_REUPS) {
-          allData.sessions[session].reUpTimes[allData.sessions[session].reUpCount] = millis();
-          allData.sessions[session].reUpCount++;
-          // Zero out attempt counters for next segment
-          if (allData.sessions[session].reUpCount < MAX_REUPS) {
-            allData.sessions[session].attemptedP[allData.sessions[session].reUpCount] = 0;
-            allData.sessions[session].attemptedC[allData.sessions[session].reUpCount] = 0;
-          }
-        }
-      }
-
-      if (cByte == SIG_INITIATE) {
-        // Control ended the session
-        if (session >= 0) {
-          allData.sessions[session].endedByButton = true;
-        }
-        holdEventPast = true;
-        longHoldEventPast = true;
-        sessionActive = false;
-      }
-
-      if (cByte == SIG_REUP) {
-        // Control confirmed re-up
-        resetConsentTimer(cByte, pByte, consentTimer);
-
-        if (session >= 0 && allData.sessions[session].reUpCount < MAX_REUPS) {
-          allData.sessions[session].reUpTimes[allData.sessions[session].reUpCount] = millis();
-          allData.sessions[session].reUpCount++;
-          if (allData.sessions[session].reUpCount < MAX_REUPS) {
-            allData.sessions[session].attemptedP[allData.sessions[session].reUpCount] = 0;
-            allData.sessions[session].attemptedC[allData.sessions[session].reUpCount] = 0;
-          }
-        }
-      }
-    }
-
-    // Check local button
-    int btn = checkButton();
-    switch (btn) {
-      case BTN_DOUBLE:
-        Serial.println("Double-click — ending session");
-        holdEventPast = true;
-        longHoldEventPast = true;
-        pTouched.writeValue(SIG_INITIATE);
-        pByte = SIG_NONE;
-        if (session >= 0) {
-          allData.sessions[session].endedByButton = true;
-        }
-        sessionActive = false;
-        break;
-      case BTN_NONE:
-        break;
-      default:
-        Serial.println("Button press — signaling");
-        pTouched.writeValue(SIG_PRESSING);
-        pByte = SIG_PRESSING;
-        if (session >= 0 && allData.sessions[session].reUpCount < MAX_REUPS) {
-          allData.sessions[session].attemptedP[allData.sessions[session].reUpCount]++;
-        }
-        break;
-    }
-
-    // Check consent timer expiry
-    if (millis() > consentTimer + CONSENT_DURATION) {
-      Serial.println("Consent timer expired");
-      if (session >= 0) {
-        allData.sessions[session].endedByButton = false;
-      }
-      holdEventPast = true;
-      longHoldEventPast = true;
-      sessionActive = false;
-    }
-  }
-
-  Serial.println("Exiting mainLoop");
-  drv.setRealtimeValue(0);
-
-  // Record session end time
-  if (session >= 0) {
-    allData.sessions[session].endTime = millis();
-  }
+void saveSessionData() {
+  deleteSessionData();
+  dataFlash.writePrefs(&allData, sizeof(allData));
 }
 
-// ─────────────────────────────────────────────────────────────────
-// Serial Command Handler (for dashboard communication)
-// ─────────────────────────────────────────────────────────────────
-void handleSerialCommands() {
-  while (Serial.available()) {
-    char cmd = Serial.read();
-    if (cmd == 'd') {
-      // Wipe all stored data
-      Serial.println("Deleting all data");
-      memset(&allData, 0, sizeof(allData));
-      deleteData();
-      myFlashPrefs.writePrefs(&allData, sizeof(allData));
-      printJSONData();  // Send updated (empty) data back
-    } else if (cmd == 'p') {
-      // Print current data
-      printJSONData();
-    }
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────
-// JSON Data Output (for dashboard)
-// ─────────────────────────────────────────────────────────────────
 void printJSONData() {
   Serial.print("Current millis: ");
   Serial.println(millis());
@@ -703,9 +262,705 @@ void printJSONData() {
   Serial.println("]}");
 }
 
+
+
 // ─────────────────────────────────────────────────────────────────
-// Reset Consent Timer
+// Main Loop
 // ─────────────────────────────────────────────────────────────────
+void loop() {
+  if (serialMode) {
+    loopSerial();
+  } else {
+    loopBLE();
+  }
+}
+
+// =================================================================
+//                      SERIAL MODE
+// =================================================================
+
+void serialCheckSerial() {
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n' || c == '\r') {
+      if (serialInputBuffer.length() > 0) {
+        if (serialInputBuffer.startsWith("C:")) {
+          lastCByte = serialInputBuffer.substring(2).toInt();
+          cUpdated = true;
+        } else if (serialInputBuffer == "d") {
+          Serial.println("Deleting all data");
+          memset(&allData, 0, sizeof(allData));
+          deleteSessionData();
+          dataFlash.writePrefs(&allData, sizeof(allData));
+          printJSONData();
+        } else if (serialInputBuffer == "p") {
+          printJSONData();
+        }
+        serialInputBuffer = "";
+      }
+    } else {
+      serialInputBuffer += c;
+    }
+  }
+}
+
+void serialWritePTouched(byte value) {
+  Serial.print("P:");
+  Serial.println(value);
+}
+
+bool serialCTouchedUpdated(byte &cByte) {
+  serialCheckSerial();
+  if (cUpdated) {
+    cByte = lastCByte;
+    cUpdated = false;
+    return true;
+  }
+  return false;
+}
+
+void loopSerial() {
+  if (lowPowerMode) {
+    while (checkButton() != BTN_LONG_HOLD) {}
+    connectionBuzz(true);
+    lowPowerMode = false;
+    ignoreUp = true;
+    holdEventPast = true;
+    longHoldEventPast = true;
+  }
+
+  int loopControl = STATE_IDLE;
+  byte cByte = SIG_NONE;
+  byte pByte = SIG_NONE;
+
+  waitForStart_S(loopControl, pByte, cByte);
+
+  if (loopControl == STATE_INITIATOR) {
+    initiator_S(loopControl, pByte, cByte);
+    if (allData.numPInits < MAX_INIT_LOG) {
+      allData.pInitTimes[allData.numPInits] = millis();
+      allData.numPInits++;
+    }
+    lastInitiator = 1;
+    saveSessionData();
+    printJSONData();
+  } else if (loopControl == STATE_INITIATEE) {
+    initiatee_S(pByte, cByte, loopControl);
+    if (allData.numCInits < MAX_INIT_LOG) {
+      allData.cInitTimes[allData.numCInits] = millis();
+      allData.numCInits++;
+    }
+    lastInitiator = 0;
+    saveSessionData();
+    printJSONData();
+  }
+
+  if (loopControl == STATE_MAIN_LOOP) {
+    mainLoop_S(cByte, pByte);
+    if (allData.numSessions <= MAX_SESSIONS) {
+      int idx = allData.numSessions - 1;
+      allData.sessions[idx].initiator = lastInitiator;
+      saveSessionData();
+      printJSONData();
+    }
+  }
+
+  allLEDsOff();
+}
+
+void waitForStart_S(int &loopControl, byte &pByte, byte &cByte) {
+  Serial.println("waitForStart");
+  ignoreUp = true;
+  holdEventPast = true;
+  longHoldEventPast = true;
+
+  unsigned long settleEnd = millis() + 200;
+  while (millis() < settleEnd) {
+    serialCTouchedUpdated(cByte);
+    checkButton();
+  }
+
+  while (true) {
+    if (serialCTouchedUpdated(cByte)) {
+      Serial.print("cTouched updated: "); Serial.println(cByte);
+      if (cByte == SIG_INITIATE) {
+        cByte = SIG_NONE;
+        loopControl = STATE_INITIATEE;
+        break;
+      }
+    }
+
+    int btn = checkButton();
+    if (btn == BTN_LONG_HOLD) {
+      Serial.println("Long hold — entering low power");
+      holdEventPast = true;
+      longHoldEventPast = true;
+      lowPowerMode = true;
+      connectionBuzz(true);
+      return;
+    }
+    if (btn != BTN_NONE && btn != BTN_HOLD) {
+      Serial.println("Button press — initiating");
+      serialWritePTouched(SIG_INITIATE);
+      pByte = SIG_NONE;
+      loopControl = STATE_INITIATOR;
+      break;
+    }
+  }
+  Serial.println("Exiting waitForStart");
+}
+
+void initiator_S(int &loopControl, byte &pByte, byte &cByte) {
+  Serial.println("Entering initiator");
+  holdEventPast = true;
+  longHoldEventPast = true;
+  ignoreUp = true;
+
+  unsigned long cycleStart = millis();
+  int count = 0;
+
+  while (count < INITIATE_MAX_CYCLES) {
+    if (checkButton() == BTN_DOUBLE) {
+      Serial.println("Initiator double-click — cancelling");
+      serialWritePTouched(SIG_CANCEL);
+      break;
+    }
+
+    if (millis() < cycleStart + INITIATE_BUZZ_LENGTH) {
+      drv.setRealtimeValue(INITIATE_STRENGTH);
+      digitalWrite(RED_PIN, LOW);
+    } else {
+      drv.setRealtimeValue(0);
+      digitalWrite(RED_PIN, HIGH);
+    }
+
+    if (millis() >= cycleStart + INITIATE_CYCLE_LEN) {
+      cycleStart = millis();
+      count++;
+    }
+
+    if (serialCTouchedUpdated(cByte)) {
+      Serial.print("cTouched in initiator: "); Serial.println(cByte);
+      if (cByte == SIG_INITIATE) {
+        cByte = SIG_NONE;
+        loopControl = STATE_MAIN_LOOP;
+        break;
+      } else if (cByte == SIG_CANCEL) {
+        cByte = SIG_NONE;
+        break;
+      }
+    }
+  }
+
+  Serial.println("Exiting initiator");
+  drv.setRealtimeValue(0);
+  digitalWrite(RED_PIN, HIGH);
+}
+
+void initiatee_S(byte &pByte, byte &cByte, int &loopControl) {
+  Serial.println("Entering initiatee");
+  holdEventPast = true;
+  longHoldEventPast = true;
+  ignoreUp = true;
+
+  unsigned long cycleStart = millis();
+  int count = 0;
+
+  while (loopControl == STATE_INITIATEE && count < INITIATE_MAX_CYCLES) {
+    if (serialCTouchedUpdated(cByte)) {
+      if (cByte == SIG_CANCEL) {
+        cByte = SIG_NONE;
+        break;
+      }
+    }
+
+    if (millis() < cycleStart + INITIATE_BUZZ_LENGTH) {
+      drv.setRealtimeValue(INITIATE_STRENGTH);
+      digitalWrite(RED_PIN, LOW);
+    } else {
+      drv.setRealtimeValue(0);
+      digitalWrite(RED_PIN, HIGH);
+    }
+
+    if (millis() >= cycleStart + INITIATE_CYCLE_LEN) {
+      cycleStart = millis();
+      count++;
+    }
+
+    switch (checkButton()) {
+      case BTN_DOUBLE:
+        Serial.println("Double-click — cancelling");
+        serialWritePTouched(SIG_CANCEL);
+        loopControl = STATE_INITIATOR;
+        break;
+      case BTN_NONE:
+        break;
+      default:
+        Serial.println("Accepting initiation");
+        serialWritePTouched(SIG_INITIATE);
+        pByte = SIG_NONE;
+        loopControl = STATE_MAIN_LOOP;
+        break;
+    }
+  }
+
+  Serial.println("Exiting initiatee");
+  drv.setRealtimeValue(0);
+  digitalWrite(RED_PIN, HIGH);
+}
+
+void mainLoop_S(byte &cByte, byte &pByte) {
+  Serial.println("Entering mainLoop");
+
+  int session = -1;
+  if (allData.numSessions < MAX_SESSIONS) {
+    session = allData.numSessions++;
+    allData.sessions[session].beginTime = millis();
+    allData.sessions[session].reUpCount = 0;
+    allData.sessions[session].endedByButton = false;
+    allData.sessions[session].attemptedP[0] = 0;
+    allData.sessions[session].attemptedC[0] = 0;
+  }
+
+  digitalWrite(BLUE_PIN, LOW);
+  digitalWrite(RED_PIN, HIGH);
+  unsigned long consentTimer = millis();
+  bool sessionActive = true;
+
+  while (sessionActive) {
+    long remaining = (long)(consentTimer + CONSENT_DURATION - millis());
+    int buzzValue = map(constrain(remaining, 0, CONSENT_DURATION), 0, CONSENT_DURATION, 30, 127);
+    drv.setRealtimeValue(buzzValue);
+
+    if (serialCTouchedUpdated(cByte)) {
+      Serial.print("cTouched in mainLoop: "); Serial.println(cByte);
+
+      if (cByte == SIG_PRESSING && session >= 0 && allData.sessions[session].reUpCount < MAX_REUPS) {
+        allData.sessions[session].attemptedC[allData.sessions[session].reUpCount]++;
+      }
+
+      if (cByte == SIG_PRESSING && pByte == SIG_PRESSING) {
+        serialWritePTouched(SIG_REUP);
+        pByte = SIG_REUP;
+        resetConsentTimer(cByte, pByte, consentTimer);
+        if (session >= 0 && allData.sessions[session].reUpCount < MAX_REUPS) {
+          allData.sessions[session].reUpTimes[allData.sessions[session].reUpCount] = millis();
+          allData.sessions[session].reUpCount++;
+          if (allData.sessions[session].reUpCount < MAX_REUPS) {
+            allData.sessions[session].attemptedP[allData.sessions[session].reUpCount] = 0;
+            allData.sessions[session].attemptedC[allData.sessions[session].reUpCount] = 0;
+          }
+        }
+      }
+
+      if (cByte == SIG_INITIATE) {
+        if (session >= 0) allData.sessions[session].endedByButton = true;
+        holdEventPast = true;
+        longHoldEventPast = true;
+        sessionActive = false;
+      }
+
+      if (cByte == SIG_REUP) {
+        resetConsentTimer(cByte, pByte, consentTimer);
+        if (session >= 0 && allData.sessions[session].reUpCount < MAX_REUPS) {
+          allData.sessions[session].reUpTimes[allData.sessions[session].reUpCount] = millis();
+          allData.sessions[session].reUpCount++;
+          if (allData.sessions[session].reUpCount < MAX_REUPS) {
+            allData.sessions[session].attemptedP[allData.sessions[session].reUpCount] = 0;
+            allData.sessions[session].attemptedC[allData.sessions[session].reUpCount] = 0;
+          }
+        }
+      }
+    }
+
+    int btn = checkButton();
+    switch (btn) {
+      case BTN_DOUBLE:
+        Serial.println("Double-click — ending session");
+        holdEventPast = true;
+        longHoldEventPast = true;
+        serialWritePTouched(SIG_INITIATE);
+        pByte = SIG_NONE;
+        if (session >= 0) allData.sessions[session].endedByButton = true;
+        sessionActive = false;
+        break;
+      case BTN_NONE:
+        break;
+      default:
+        serialWritePTouched(SIG_PRESSING);
+        pByte = SIG_PRESSING;
+        if (session >= 0 && allData.sessions[session].reUpCount < MAX_REUPS) {
+          allData.sessions[session].attemptedP[allData.sessions[session].reUpCount]++;
+        }
+        break;
+    }
+
+    if (millis() > consentTimer + CONSENT_DURATION) {
+      Serial.println("Consent timer expired");
+      if (session >= 0) allData.sessions[session].endedByButton = false;
+      holdEventPast = true;
+      longHoldEventPast = true;
+      sessionActive = false;
+    }
+  }
+
+  Serial.println("Exiting mainLoop");
+  drv.setRealtimeValue(0);
+  if (session >= 0) allData.sessions[session].endTime = millis();
+}
+
+// =================================================================
+//                        BLE MODE
+// =================================================================
+
+void handleBLESerialCommands() {
+  while (Serial.available()) {
+    char cmd = Serial.read();
+    if (cmd == 'd') {
+      Serial.println("Deleting all data");
+      memset(&allData, 0, sizeof(allData));
+      deleteSessionData();
+      dataFlash.writePrefs(&allData, sizeof(allData));
+      printJSONData();
+    } else if (cmd == 'p') {
+      printJSONData();
+    }
+  }
+}
+
+void loopBLE() {
+  Serial.println("-- Loop: waiting for connection --");
+
+  handleBLESerialCommands();
+
+  if (checkButton() == BTN_LONG_HOLD) {
+    lowPowerMode = true;
+    connectionBuzz(true);
+    holdEventPast = true;
+    longHoldEventPast = true;
+  }
+
+  if (lowPowerMode) {
+    Serial.println("Low power mode active");
+    BLE.stopAdvertise();
+    while (checkButton() != BTN_LONG_HOLD) {}
+    Serial.println("Waking from low power");
+    connectionBuzz(true);
+    lowPowerMode = false;
+    BLE.advertise();
+    ignoreUp = true;
+    holdEventPast = true;
+    longHoldEventPast = true;
+  }
+
+  BLEDevice central = BLE.central();
+
+  if (central) {
+    Serial.println("Connected to central");
+    Serial.print("Current millis: ");
+    Serial.println(millis());
+    connected = true;
+    connectionBuzz();
+
+    while (central.connected() && !lowPowerMode) {
+      handleBLESerialCommands();
+
+      int loopControl = STATE_IDLE;
+      byte cByte = SIG_NONE;
+      byte pByte = SIG_NONE;
+
+      waitForStart_B(central, loopControl, pByte, cByte);
+
+      if (loopControl == STATE_INITIATOR) {
+        initiator_B(central, loopControl, pByte, cByte);
+        if (allData.numPInits < MAX_INIT_LOG) {
+          allData.pInitTimes[allData.numPInits] = millis();
+          allData.numPInits++;
+        }
+        lastInitiator = 1;
+        saveSessionData();
+        printJSONData();
+      } else if (loopControl == STATE_INITIATEE) {
+        initiatee_B(central, pByte, cByte, loopControl);
+        if (allData.numCInits < MAX_INIT_LOG) {
+          allData.cInitTimes[allData.numCInits] = millis();
+          allData.numCInits++;
+        }
+        lastInitiator = 0;
+        saveSessionData();
+        printJSONData();
+      }
+
+      if (loopControl == STATE_MAIN_LOOP && central.connected()) {
+        mainLoop_B(central, cByte, pByte);
+        if (allData.numSessions <= MAX_SESSIONS) {
+          int idx = allData.numSessions - 1;
+          allData.sessions[idx].initiator = lastInitiator;
+          saveSessionData();
+          printJSONData();
+        }
+      }
+
+      allLEDsOff();
+    }
+
+    Serial.println("Disconnected from central");
+    connected = false;
+    connectionBuzz(lowPowerMode);
+  }
+}
+
+void waitForStart_B(BLEDevice central, int &loopControl, byte &pByte, byte &cByte) {
+  Serial.println("waitForStart");
+  ignoreUp = true;
+  holdEventPast = true;
+  longHoldEventPast = true;
+
+  unsigned long settleEnd = millis() + 200;
+  while (millis() < settleEnd && central.connected()) {
+    if (bleCTouched.written()) {
+      bleCTouched.readValue(cByte);
+    }
+    checkButton();
+  }
+
+  while (central.connected()) {
+    if (bleCTouched.written()) {
+      bleCTouched.readValue(cByte);
+      Serial.print("cTouched updated: "); Serial.println(cByte);
+      if (cByte == SIG_INITIATE) {
+        cByte = SIG_NONE;
+        loopControl = STATE_INITIATEE;
+        break;
+      }
+    }
+
+    int btn = checkButton();
+    if (btn == BTN_LONG_HOLD) {
+      Serial.println("Long hold — disconnecting for low power");
+      holdEventPast = true;
+      longHoldEventPast = true;
+      central.disconnect();
+      lowPowerMode = true;
+      return;
+    }
+    if (btn != BTN_NONE && btn != BTN_HOLD) {
+      Serial.println("Button press — initiating");
+      blePTouched.writeValue(SIG_INITIATE);
+      pByte = SIG_NONE;
+      loopControl = STATE_INITIATOR;
+      break;
+    }
+  }
+  Serial.println("Exiting waitForStart");
+}
+
+void initiator_B(BLEDevice central, int &loopControl, byte &pByte, byte &cByte) {
+  Serial.println("Entering initiator");
+  holdEventPast = true;
+  longHoldEventPast = true;
+  ignoreUp = true;
+
+  unsigned long cycleStart = millis();
+  int count = 0;
+
+  while (central.connected() && count < INITIATE_MAX_CYCLES) {
+    if (checkButton() == BTN_DOUBLE) {
+      Serial.println("Initiator double-click — cancelling");
+      blePTouched.writeValue(SIG_CANCEL);
+      break;
+    }
+
+    if (millis() < cycleStart + INITIATE_BUZZ_LENGTH) {
+      drv.setRealtimeValue(INITIATE_STRENGTH);
+      digitalWrite(RED_PIN, LOW);
+    } else {
+      drv.setRealtimeValue(0);
+      digitalWrite(RED_PIN, HIGH);
+    }
+
+    if (millis() >= cycleStart + INITIATE_CYCLE_LEN) {
+      cycleStart = millis();
+      count++;
+    }
+
+    if (bleCTouched.written()) {
+      bleCTouched.readValue(cByte);
+      Serial.print("cTouched in initiator: "); Serial.println(cByte);
+      if (cByte == SIG_INITIATE) {
+        cByte = SIG_NONE;
+        loopControl = STATE_MAIN_LOOP;
+        break;
+      } else if (cByte == SIG_CANCEL) {
+        cByte = SIG_NONE;
+        break;
+      }
+    }
+  }
+
+  Serial.println("Exiting initiator");
+  drv.setRealtimeValue(0);
+  digitalWrite(RED_PIN, HIGH);
+}
+
+void initiatee_B(BLEDevice central, byte &pByte, byte &cByte, int &loopControl) {
+  Serial.println("Entering initiatee");
+  holdEventPast = true;
+  longHoldEventPast = true;
+  ignoreUp = true;
+
+  unsigned long cycleStart = millis();
+  int count = 0;
+
+  while (central.connected() && loopControl == STATE_INITIATEE && count < INITIATE_MAX_CYCLES) {
+    if (bleCTouched.written()) {
+      bleCTouched.readValue(cByte);
+      if (cByte == SIG_CANCEL) {
+        cByte = SIG_NONE;
+        break;
+      }
+    }
+
+    if (millis() < cycleStart + INITIATE_BUZZ_LENGTH) {
+      drv.setRealtimeValue(INITIATE_STRENGTH);
+      digitalWrite(RED_PIN, LOW);
+    } else {
+      drv.setRealtimeValue(0);
+      digitalWrite(RED_PIN, HIGH);
+    }
+
+    if (millis() >= cycleStart + INITIATE_CYCLE_LEN) {
+      cycleStart = millis();
+      count++;
+    }
+
+    switch (checkButton()) {
+      case BTN_DOUBLE:
+        Serial.println("Double-click — cancelling");
+        blePTouched.writeValue(SIG_CANCEL);
+        loopControl = STATE_INITIATOR;
+        break;
+      case BTN_NONE:
+        break;
+      default:
+        Serial.println("Accepting initiation");
+        blePTouched.writeValue(SIG_INITIATE);
+        pByte = SIG_NONE;
+        loopControl = STATE_MAIN_LOOP;
+        break;
+    }
+  }
+
+  Serial.println("Exiting initiatee");
+  drv.setRealtimeValue(0);
+  digitalWrite(RED_PIN, HIGH);
+}
+
+void mainLoop_B(BLEDevice central, byte &cByte, byte &pByte) {
+  Serial.println("Entering mainLoop");
+
+  int session = -1;
+  if (central.connected() && allData.numSessions < MAX_SESSIONS) {
+    session = allData.numSessions++;
+    allData.sessions[session].beginTime = millis();
+    allData.sessions[session].reUpCount = 0;
+    allData.sessions[session].endedByButton = false;
+    allData.sessions[session].attemptedP[0] = 0;
+    allData.sessions[session].attemptedC[0] = 0;
+  }
+
+  digitalWrite(BLUE_PIN, LOW);
+  digitalWrite(RED_PIN, HIGH);
+  unsigned long consentTimer = millis();
+  bool sessionActive = true;
+
+  while (central.connected() && sessionActive) {
+    long remaining = (long)(consentTimer + CONSENT_DURATION - millis());
+    int buzzValue = map(constrain(remaining, 0, CONSENT_DURATION), 0, CONSENT_DURATION, 30, 127);
+    drv.setRealtimeValue(buzzValue);
+
+    if (bleCTouched.written()) {
+      bleCTouched.readValue(cByte);
+      Serial.print("cTouched in mainLoop: "); Serial.println(cByte);
+
+      if (cByte == SIG_PRESSING && session >= 0 && allData.sessions[session].reUpCount < MAX_REUPS) {
+        allData.sessions[session].attemptedC[allData.sessions[session].reUpCount]++;
+      }
+
+      if (cByte == SIG_PRESSING && pByte == SIG_PRESSING) {
+        blePTouched.writeValue(SIG_REUP);
+        pByte = SIG_REUP;
+        resetConsentTimer(cByte, pByte, consentTimer);
+        if (session >= 0 && allData.sessions[session].reUpCount < MAX_REUPS) {
+          allData.sessions[session].reUpTimes[allData.sessions[session].reUpCount] = millis();
+          allData.sessions[session].reUpCount++;
+          if (allData.sessions[session].reUpCount < MAX_REUPS) {
+            allData.sessions[session].attemptedP[allData.sessions[session].reUpCount] = 0;
+            allData.sessions[session].attemptedC[allData.sessions[session].reUpCount] = 0;
+          }
+        }
+      }
+
+      if (cByte == SIG_INITIATE) {
+        if (session >= 0) allData.sessions[session].endedByButton = true;
+        holdEventPast = true;
+        longHoldEventPast = true;
+        sessionActive = false;
+      }
+
+      if (cByte == SIG_REUP) {
+        resetConsentTimer(cByte, pByte, consentTimer);
+        if (session >= 0 && allData.sessions[session].reUpCount < MAX_REUPS) {
+          allData.sessions[session].reUpTimes[allData.sessions[session].reUpCount] = millis();
+          allData.sessions[session].reUpCount++;
+          if (allData.sessions[session].reUpCount < MAX_REUPS) {
+            allData.sessions[session].attemptedP[allData.sessions[session].reUpCount] = 0;
+            allData.sessions[session].attemptedC[allData.sessions[session].reUpCount] = 0;
+          }
+        }
+      }
+    }
+
+    int btn = checkButton();
+    switch (btn) {
+      case BTN_DOUBLE:
+        Serial.println("Double-click — ending session");
+        holdEventPast = true;
+        longHoldEventPast = true;
+        blePTouched.writeValue(SIG_INITIATE);
+        pByte = SIG_NONE;
+        if (session >= 0) allData.sessions[session].endedByButton = true;
+        sessionActive = false;
+        break;
+      case BTN_NONE:
+        break;
+      default:
+        blePTouched.writeValue(SIG_PRESSING);
+        pByte = SIG_PRESSING;
+        if (session >= 0 && allData.sessions[session].reUpCount < MAX_REUPS) {
+          allData.sessions[session].attemptedP[allData.sessions[session].reUpCount]++;
+        }
+        break;
+    }
+
+    if (millis() > consentTimer + CONSENT_DURATION) {
+      Serial.println("Consent timer expired");
+      if (session >= 0) allData.sessions[session].endedByButton = false;
+      holdEventPast = true;
+      longHoldEventPast = true;
+      sessionActive = false;
+    }
+  }
+
+  Serial.println("Exiting mainLoop");
+  drv.setRealtimeValue(0);
+  if (session >= 0) allData.sessions[session].endTime = millis();
+}
+
+// =================================================================
+//                      SHARED FUNCTIONS
+// =================================================================
+
 void resetConsentTimer(byte &cByte, byte &pByte, unsigned long &consentTimer) {
   Serial.println("Timer reset");
   consentTimer = millis();
@@ -713,17 +968,19 @@ void resetConsentTimer(byte &cByte, byte &pByte, unsigned long &consentTimer) {
   pByte = SIG_NONE;
 }
 
-// ─────────────────────────────────────────────────────────────────
-// Button Handler
-// Returns: BTN_NONE, BTN_SINGLE, BTN_DOUBLE, BTN_LONG_HOLD, BTN_HOLD
-// Note: holdEventPast and longHoldEventPast are managed manually
-//       throughout the code to control when holds re-fire.
-// ─────────────────────────────────────────────────────────────────
+void switchModeAndReboot() {
+  modePrefs.mode = serialMode ? 0 : 1;
+  modeFlash.deletePrefs();
+  modeFlash.garbageCollection();
+  modeFlash.writePrefs(&modePrefs, sizeof(modePrefs));
+  delay(100);
+  NVIC_SystemReset();
+}
+
 int checkButton() {
   int event = BTN_NONE;
   buttonVal = digitalRead(BUTTON_PIN);
 
-  // Button pressed down
   if (buttonVal == LOW && buttonLast == HIGH && (millis() - upTime) > DEBOUNCE_MS) {
     downTime = millis();
     ignoreUp = false;
@@ -738,7 +995,6 @@ int checkButton() {
     }
     DCwaiting = false;
   }
-  // Button released
   else if (buttonVal == HIGH && buttonLast == LOW && (millis() - downTime) > DEBOUNCE_MS) {
     if (!ignoreUp) {
       upTime = millis();
@@ -753,7 +1009,6 @@ int checkButton() {
     }
   }
 
-  // Single click (DC gap expired without second press)
   if (buttonVal == HIGH && (millis() - upTime) >= DC_GAP_MS
       && DCwaiting && !DConUp && singleOK && event != BTN_DOUBLE) {
     if (!ignoreUp) {
@@ -762,7 +1017,6 @@ int checkButton() {
     }
   }
 
-  // Hold detection
   if (buttonVal == LOW && (millis() - downTime) >= HOLD_TIME_MS) {
     if (!holdEventPast) {
       event = BTN_HOLD;
@@ -773,7 +1027,7 @@ int checkButton() {
     }
   }
 
-  // Reboot check: 8 clicks within 4 seconds triggers reset
+  // 8-click mode switch
   if (event == BTN_SINGLE || event == BTN_DOUBLE) {
     if (rebootClickCount == 0 || (millis() - rebootWindowStart) > REBOOT_WINDOW) {
       rebootClickCount = 0;
@@ -781,7 +1035,7 @@ int checkButton() {
     }
     rebootClickCount += (event == BTN_DOUBLE) ? 2 : 1;
     if (rebootClickCount >= REBOOT_CLICKS) {
-      NVIC_SystemReset();
+      switchModeAndReboot();
     }
   }
 
